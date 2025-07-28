@@ -1,0 +1,120 @@
+name: Build, Push, and Deploy Microservices
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  IMAGE_VERSION: v1.0.${{ github.run_number }}
+  GHCR: ghcr.io
+  OWNER: ${{ github.repository_owner }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+      packages: write
+
+    outputs:
+      image_version: ${{ env.IMAGE_VERSION }}
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Login to GitHub Container Registry
+      run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+    - name: Build & Push Backend
+      run: |
+        docker build -t $GHCR/$OWNER/flask_backend:${IMAGE_VERSION} ./backend
+        docker build -t $GHCR/$OWNER/flask_backend:latest ./backend
+        docker push $GHCR/$OWNER/flask_backend:${IMAGE_VERSION}
+        docker push $GHCR/$OWNER/flask_backend:latest
+
+    - name: Build & Push Frontend
+      run: |
+        docker build -t $GHCR/$OWNER/nginx_frontend:${IMAGE_VERSION} ./frontend
+        docker build -t $GHCR/$OWNER/nginx_frontend:latest ./frontend
+        docker push $GHCR/$OWNER/nginx_frontend:${IMAGE_VERSION}
+        docker push $GHCR/$OWNER/nginx_frontend:latest
+
+    - name: Push MySQL (Optional)
+      run: |
+        docker pull mysql:5.7
+        docker tag mysql:5.7 $GHCR/$OWNER/mysql_db:${IMAGE_VERSION}
+        docker tag mysql:5.7 $GHCR/$OWNER/mysql_db:latest
+        docker push $GHCR/$OWNER/mysql_db:${IMAGE_VERSION}
+        docker push $GHCR/$OWNER/mysql_db:latest
+
+    - name: Update docker-compose.github.yml with New Versions
+      run: |
+        # Update the GitHub packages docker-compose file with new version
+        sed -i "s|ghcr.io/$OWNER/flask_backend:.*|ghcr.io/$OWNER/flask_backend:${IMAGE_VERSION}|g" ./docker-compose.github.yml
+        sed -i "s|ghcr.io/$OWNER/nginx_frontend:.*|ghcr.io/$OWNER/nginx_frontend:${IMAGE_VERSION}|g" ./docker-compose.github.yml
+        sed -i "s|ghcr.io/$OWNER/mysql_db:.*|ghcr.io/$OWNER/mysql_db:${IMAGE_VERSION}|g" ./docker-compose.github.yml
+        
+        # Also create a versioned docker-compose file for deployment
+        cp docker-compose.github.yml docker-compose.deploy.yml
+
+    - name: Commit Updated Docker Compose Files
+      uses: EndBug/add-and-commit@v9
+      with:
+        message: "🚀 Auto-update docker-compose versions to ${{ env.IMAGE_VERSION }}"
+        add: |
+          docker-compose.github.yml
+          docker-compose.deploy.yml
+
+    - name: Show Build Summary
+      run: |
+        echo "### 🚀 Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "**Version:** ${IMAGE_VERSION}" >> $GITHUB_STEP_SUMMARY
+        echo "**Images Built:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Backend: $GHCR/$OWNER/flask_backend:${IMAGE_VERSION}" >> $GITHUB_STEP_SUMMARY
+        echo "- Frontend: $GHCR/$OWNER/nginx_frontend:${IMAGE_VERSION}" >> $GITHUB_STEP_SUMMARY
+        echo "- Database: $GHCR/$OWNER/mysql_db:${IMAGE_VERSION}" >> $GITHUB_STEP_SUMMARY
+
+  deploy-with-ansible:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+
+    - name: Setup SSH Key
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+
+    - name: Deploy using Pre-built Ansible Container (No Installation!)
+      run: |
+        # Use official Ansible container - no installation needed!
+        docker run --rm \
+          -v $(pwd):/workspace \
+          -v ~/.ssh:/root/.ssh:ro \
+          -w /workspace/ansible \
+          quay.io/ansible/ansible:latest \
+          ansible-playbook -i inventory.ini deploy.yml \
+            --extra-vars "image_version=${{ needs.build-and-push.outputs.image_version }}" \
+            --extra-vars "ghcr_owner=${{ github.repository_owner }}" \
+            -v
+
+    - name: Cleanup SSH Keys
+      if: always()
+      run: rm -rf ~/.ssh
+
+    - name: Deployment Summary
+      run: |
+        echo "### 🎯 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "**Status:** Completed" >> $GITHUB_STEP_SUMMARY
+        echo "**Version Deployed:** ${{ needs.build-and-push.outputs.image_version }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Deployment Method:** Ansible Container (No Installation Required!)" >> $GITHUB_STEP_SUMMARY
+        echo "**Speed:** ⚡ Much Faster" >> $GITHUB_STEP_SUMMARY

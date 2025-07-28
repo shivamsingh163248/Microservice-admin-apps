@@ -1,0 +1,48 @@
+# Ansible Deployment Variables
+
+# Application Configuration
+app_name: microservice-admin-app
+app_version: "{{ image_version | default('latest') }}"
+
+# Docker Registry Configuration
+ghcr_registry: ghcr.io
+ghcr_owner: "{{ ghcr_owner | default('shivamsingh163248') }}"
+
+# Service Configuration
+services:
+  backend:
+    image: "{{ ghcr_registry }}/{{ ghcr_owner }}/flask_backend"
+    port: 5000
+    container_name: flask_backend
+
+  frontend:
+    image: "{{ ghcr_registry }}/{{ ghcr_owner }}/nginx_frontend"
+    port: 8080
+    container_name: nginx_frontend
+
+  database:
+    image: "{{ ghcr_registry }}/{{ ghcr_owner }}/mysql_db"
+    port: 3306
+    container_name: mysql_db
+
+# Database Configuration
+mysql_config:
+  root_password: rootpass
+  database: adminapp
+  user: adminuser
+  password: adminpass
+
+# Application Directories
+app_base_dir: /opt
+app_full_dir: "{{ app_base_dir }}/{{ app_name }}"
+
+# Docker Configuration
+docker:
+  compose_version: v2.21.0
+  network_name: microservice-network
+
+# Health Check Configuration
+health_check:
+  timeout: 300
+  delay: 10
+  retries: 5
