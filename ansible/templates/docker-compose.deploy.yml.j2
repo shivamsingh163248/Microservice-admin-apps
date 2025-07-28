@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  database:
+    image: {{ ghcr_registry }}/{{ ghcr_owner }}/mysql_db:{{ image_version }}
+    container_name: mysql_db
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: adminapp
+      MYSQL_USER: adminuser
+      MYSQL_PASSWORD: adminpass
+    volumes:
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+    networks:
+      - microservice-network
+
+  backend:
+    image: {{ ghcr_registry }}/{{ ghcr_owner }}/flask_backend:{{ image_version }}
+    container_name: flask_backend
+    restart: always
+    environment:
+      DB_HOST: database
+      DB_USER: adminuser
+      DB_PASS: adminpass
+      DB_NAME: adminapp
+    ports:
+      - "5000:5000"
+    depends_on:
+      database:
+        condition: service_healthy
+    networks:
+      - microservice-network
+
+  frontend:
+    image: {{ ghcr_registry }}/{{ ghcr_owner }}/nginx_frontend:{{ image_version }}
+    container_name: nginx_frontend
+    restart: always
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    networks:
+      - microservice-network
+
+volumes:
+  mysql_data:
+    driver: local
+
+networks:
+  microservice-network:
+    driver: bridge

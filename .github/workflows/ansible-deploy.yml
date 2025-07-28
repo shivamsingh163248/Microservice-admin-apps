@@ -1,0 +1,131 @@
+name: Build, Push, and Deploy Microservices
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  IMAGE_VERSION: v1.0.${{ github.run_number }}
+  GHCR: ghcr.io
+  OWNER: ${{ github.repository_owner }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+      packages: write
+
+    outputs:
+      image_version: ${{ env.IMAGE_VERSION }}
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Login to GitHub Container Registry
+      run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+    - name: Build & Push Backend
+      run: |
+        docker build -t $GHCR/$OWNER/flask_backend:${IMAGE_VERSION} ./backend
+        docker push $GHCR/$OWNER/flask_backend:${IMAGE_VERSION}
+
+    - name: Build & Push Frontend
+      run: |
+        docker build -t $GHCR/$OWNER/nginx_frontend:${IMAGE_VERSION} ./frontend
+        docker push $GHCR/$OWNER/nginx_frontend:${IMAGE_VERSION}
+
+    - name: Push MySQL (Optional)
+      run: |
+        docker pull mysql:5.7
+        docker tag mysql:5.7 $GHCR/$OWNER/mysql_db:${IMAGE_VERSION}
+        docker push $GHCR/$OWNER/mysql_db:${IMAGE_VERSION}
+
+    - name: Update docker-compose.yml Versions
+      run: |
+        # Update the main docker-compose.yml file with new versions
+        sed -i "s|image: .*flask_backend:.*|image: $GHCR/$OWNER/flask_backend:${IMAGE_VERSION}|g" ./docker-compose.yml
+        sed -i "s|image: .*nginx_frontend:.*|image: $GHCR/$OWNER/nginx_frontend:${IMAGE_VERSION}|g" ./docker-compose.yml
+        sed -i "s|image: .*mysql_db:.*|image: $GHCR/$OWNER/mysql_db:${IMAGE_VERSION}|g" ./docker-compose.yml
+        
+        # Also update the GitHub packages docker-compose file
+        sed -i "s|ghcr.io/$OWNER/flask_backend:.*|ghcr.io/$OWNER/flask_backend:${IMAGE_VERSION}|g" ./docker-compose.github.yml
+        sed -i "s|ghcr.io/$OWNER/nginx_frontend:.*|ghcr.io/$OWNER/nginx_frontend:${IMAGE_VERSION}|g" ./docker-compose.github.yml
+        sed -i "s|ghcr.io/$OWNER/mysql_db:.*|ghcr.io/$OWNER/mysql_db:${IMAGE_VERSION}|g" ./docker-compose.github.yml
+
+    - name: Upload Updated Compose Files
+      uses: EndBug/add-and-commit@v9
+      with:
+        message: "🚀 Update docker-compose.yml to version ${{ env.IMAGE_VERSION }}"
+        add: |
+          docker-compose.yml
+          docker-compose.github.yml
+
+    - name: Show Build Summary
+      run: |
+        echo "### 🚀 Build & Push Summary" >> $GITHUB_STEP_SUMMARY
+        echo "**Version:** ${IMAGE_VERSION}" >> $GITHUB_STEP_SUMMARY
+        echo "**Registry:** GitHub Container Registry (GHCR)" >> $GITHUB_STEP_SUMMARY
+        echo "**Images Built:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Backend: $GHCR/$OWNER/flask_backend:${IMAGE_VERSION}" >> $GITHUB_STEP_SUMMARY
+        echo "- Frontend: $GHCR/$OWNER/nginx_frontend:${IMAGE_VERSION}" >> $GITHUB_STEP_SUMMARY
+        echo "- Database: $GHCR/$OWNER/mysql_db:${IMAGE_VERSION}" >> $GITHUB_STEP_SUMMARY
+        echo "**Files Updated:** docker-compose.yml, docker-compose.github.yml" >> $GITHUB_STEP_SUMMARY
+
+  deploy-with-ansible:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+    - name: Checkout Repo
+      uses: actions/checkout@v3
+      with:
+        ref: main  # Get the updated docker-compose files
+
+    - name: Setup SSH
+      uses: webfactory/ssh-agent@v0.8.0
+      with:
+        ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+    - name: Setup Ansible
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ansible
+        ansible --version
+
+    - name: Add Known Hosts
+      run: |
+        mkdir -p ~/.ssh
+        # Add your server's SSH host key to avoid host verification prompts
+        # Uncomment and modify the line below with your actual server IP
+        # ssh-keyscan -H YOUR_SERVER_IP >> ~/.ssh/known_hosts
+
+    - name: Verify Ansible Inventory
+      run: |
+        cd ansible
+        ansible-inventory -i inventory.ini --list
+        ansible all -i inventory.ini -m ping
+
+    - name: Run Ansible Playbook
+      run: |
+        cd ansible
+        ansible-playbook -i inventory.ini deploy.yml \
+          --extra-vars "image_version=${{ needs.build-and-push.outputs.image_version }}" \
+          --extra-vars "ghcr_owner=${{ github.repository_owner }}" \
+          --extra-vars "ghcr_registry=${{ env.GHCR }}" \
+          -v
+
+    - name: Deployment Summary
+      run: |
+        echo "### 🎯 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "**Status:** ✅ Deployment Completed" >> $GITHUB_STEP_SUMMARY
+        echo "**Version Deployed:** ${{ needs.build-and-push.outputs.image_version }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Deployment Method:** Ansible Playbook" >> $GITHUB_STEP_SUMMARY
+        echo "**Target Environment:** Production Servers" >> $GITHUB_STEP_SUMMARY
+        echo "**Registry:** GitHub Container Registry" >> $GITHUB_STEP_SUMMARY

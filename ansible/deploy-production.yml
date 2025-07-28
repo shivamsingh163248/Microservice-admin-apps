@@ -1,0 +1,182 @@
+---
+- name: Deploy Microservices using GitHub Container Registry
+  hosts: webservers
+  become: yes
+  gather_facts: yes
+
+  vars:
+    app_name: microservice-admin-app
+    app_dir: "/opt/{{ app_name }}"
+    docker_compose_file: docker-compose.production.yml
+    ghcr_registry: "{{ ghcr_registry | default('ghcr.io') }}"
+    image_version: "{{ image_version | default('latest') }}"
+    ghcr_owner: "{{ ghcr_owner | default('shivamsingh163248') }}"
+
+  pre_tasks:
+  - name: Display deployment information
+    debug:
+      msg:
+      - "🚀 Starting deployment of {{ app_name }}"
+      - "📦 Version: {{ image_version }}"
+      - "🏗️  Registry: {{ ghcr_registry }}"
+      - "👤 Owner: {{ ghcr_owner }}"
+      - "📂 Target Directory: {{ app_dir }}"
+
+  tasks:
+  - name: Update system packages
+    apt:
+      update_cache: yes
+      cache_valid_time: 3600
+    when: ansible_os_family == "Debian"
+
+  - name: Install required packages
+    apt:
+      name:
+      - docker.io
+      - docker-compose-plugin
+      - git
+      - curl
+      - unzip
+      state: present
+    when: ansible_os_family == "Debian"
+
+  - name: Start and enable Docker service
+    systemd:
+      name: docker
+      state: started
+      enabled: yes
+
+  - name: Add user to docker group
+    user:
+      name: "{{ ansible_user }}"
+      groups: docker
+      append: yes
+
+  - name: Create application directory
+    file:
+      path: "{{ app_dir }}"
+      state: directory
+      owner: "{{ ansible_user }}"
+      group: "{{ ansible_user }}"
+      mode: '0755'
+
+  - name: Clone or update application repository
+    git:
+      repo: "https://github.com/{{ ghcr_owner }}/Microservice-admin-apps.git"
+      dest: "{{ app_dir }}"
+      version: main
+      force: yes
+    become_user: "{{ ansible_user }}"
+
+  - name: Create production docker-compose file
+    template:
+      src: docker-compose.production.yml.j2
+      dest: "{{ app_dir }}/{{ docker_compose_file }}"
+      owner: "{{ ansible_user }}"
+      group: "{{ ansible_user }}"
+      mode: '0644'
+
+  - name: Stop existing containers
+    command: docker-compose -f {{ docker_compose_file }} down
+    args:
+      chdir: "{{ app_dir }}"
+    become_user: "{{ ansible_user }}"
+    ignore_errors: yes
+
+  - name: Login to GitHub Container Registry
+    command: >
+      docker login {{ ghcr_registry }}  -u {{ ghcr_owner }}  -p {{ ansible_env.GITHUB_TOKEN | default('') }}
+    become_user: "{{ ansible_user }}"
+    when: ansible_env.GITHUB_TOKEN is defined
+    no_log: true
+
+  - name: Pull latest Docker images
+    command: docker-compose -f {{ docker_compose_file }} pull
+    args:
+      chdir: "{{ app_dir }}"
+    become_user: "{{ ansible_user }}"
+
+  - name: Start services with docker-compose
+    command: docker-compose -f {{ docker_compose_file }} up -d
+    args:
+      chdir: "{{ app_dir }}"
+    become_user: "{{ ansible_user }}"
+
+  - name: Wait for database to be ready
+    wait_for:
+      port: 3306
+      host: localhost
+      delay: 10
+      timeout: 300
+      msg: "Database service did not start within 5 minutes"
+
+  - name: Wait for backend to be ready
+    wait_for:
+      port: 5000
+      host: localhost
+      delay: 5
+      timeout: 300
+      msg: "Backend service did not start within 5 minutes"
+
+  - name: Wait for frontend to be ready
+    wait_for:
+      port: 8080
+      host: localhost
+      delay: 5
+      timeout: 300
+      msg: "Frontend service did not start within 5 minutes"
+
+  - name: Verify deployment - Backend health check
+    uri:
+      url: "http://localhost:5000/health"
+      method: GET
+      status_code: 200
+    retries: 5
+    delay: 10
+    register: backend_health
+
+  - name: Verify deployment - Frontend accessibility
+    uri:
+      url: "http://localhost:8080"
+      method: GET
+      status_code: 200
+    retries: 5
+    delay: 10
+    register: frontend_health
+
+  - name: Clean up old Docker images
+    command: docker image prune -f
+    become_user: "{{ ansible_user }}"
+
+  - name: Clean up old Docker containers
+    command: docker container prune -f
+    become_user: "{{ ansible_user }}"
+
+  - name: Display service status
+    command: docker-compose -f {{ docker_compose_file }} ps
+    args:
+      chdir: "{{ app_dir }}"
+    become_user: "{{ ansible_user }}"
+    register: service_status
+
+  - name: Show deployment results
+    debug:
+      msg:
+      - "✅ Deployment completed successfully!"
+      - "🔗 Frontend URL: http://{{ ansible_default_ipv4.address }}:8080"
+      - "🔗 Backend API: http://{{ ansible_default_ipv4.address }}:5000"
+      - "🔗 Backend Health: http://{{ ansible_default_ipv4.address }}:5000/health"
+      - "📂 Application Directory: {{ app_dir }}"
+      - "🏷️  Deployed Version: {{ image_version }}"
+      - "📊 Service Status:"
+      - "{{ service_status.stdout_lines }}"
+
+  post_tasks:
+  - name: Send deployment notification
+    debug:
+      msg:
+      - "🎉 Deployment Summary:"
+      - "Application: {{ app_name }}"
+      - "Version: {{ image_version }}"
+      - "Server: {{ ansible_hostname }} ({{ ansible_default_ipv4.address }})"
+      - "Status: SUCCESS ✅"

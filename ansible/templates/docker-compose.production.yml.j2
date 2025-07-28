@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  database:
+    image: {{ ghcr_registry }}/{{ ghcr_owner }}/mysql_db:{{ image_version }}
+    container_name: mysql_db_prod
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: adminapp
+      MYSQL_USER: adminuser
+      MYSQL_PASSWORD: adminpass
+    volumes:
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - mysql_data_prod:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+      interval: 30s
+      start_period: 40s
+    networks:
+      - microservice-network
+    labels:
+      - "app=microservice-admin"
+      - "service=database"
+      - "version={{ image_version }}"
+
+  backend:
+    image: {{ ghcr_registry }}/{{ ghcr_owner }}/flask_backend:{{ image_version }}
+    container_name: flask_backend_prod
+    restart: always
+    environment:
+      DB_HOST: database
+      DB_USER: adminuser
+      DB_PASS: adminpass
+      DB_NAME: adminapp
+      FLASK_ENV: production
+    ports:
+      - "5000:5000"
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      timeout: 10s
+      retries: 5
+      interval: 30s
+      start_period: 40s
+    networks:
+      - microservice-network
+    labels:
+      - "app=microservice-admin"
+      - "service=backend"
+      - "version={{ image_version }}"
+
+  frontend:
+    image: {{ ghcr_registry }}/{{ ghcr_owner }}/nginx_frontend:{{ image_version }}
+    container_name: nginx_frontend_prod
+    restart: always
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      timeout: 10s
+      retries: 5
+      interval: 30s
+      start_period: 30s
+    networks:
+      - microservice-network
+    labels:
+      - "app=microservice-admin"
+      - "service=frontend"
+      - "version={{ image_version }}"
+
+volumes:
+  mysql_data_prod:
+    driver: local
+    labels:
+      - "app=microservice-admin"
+      - "version={{ image_version }}"
+
+networks:
+  microservice-network:
+    driver: bridge
+    labels:
+      - "app=microservice-admin"
+      - "version={{ image_version }}"
