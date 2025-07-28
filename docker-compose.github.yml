@@ -1,0 +1,68 @@
+# Docker Compose file for GitHub Packages
+# Use this file to run your microservices using images from GitHub Container Registry
+# Usage: docker-compose -f docker-compose.github.yml up
+
+version: '3.8'
+
+services:
+  database:
+    # Using GitHub Packages MySQL image (or you can use the official MySQL image)
+    image: ghcr.io/shivamsingh163248/mysql_db:latest
+    # Fallback to official MySQL if GitHub package is not available
+    # image: mysql:5.7
+    container_name: mysql_db
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: adminapp
+      MYSQL_USER: adminuser
+      MYSQL_PASSWORD: adminpass
+    volumes:
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+    networks:
+      - microservice-network
+
+  backend:
+    # Using GitHub Packages Flask backend image
+    image: ghcr.io/shivamsingh163248/flask_backend:latest
+    container_name: flask_backend
+    restart: always
+    environment:
+      DB_HOST: database
+      DB_USER: adminuser
+      DB_PASS: adminpass
+      DB_NAME: adminapp
+    ports:
+      - "5000:5000"
+    depends_on:
+      database:
+        condition: service_healthy
+    networks:
+      - microservice-network
+
+  frontend:
+    # Using GitHub Packages Nginx frontend image
+    image: ghcr.io/shivamsingh163248/nginx_frontend:latest
+    container_name: nginx_frontend
+    restart: always
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    networks:
+      - microservice-network
+
+volumes:
+  mysql_data:
+    driver: local
+
+networks:
+  microservice-network:
+    driver: bridge
