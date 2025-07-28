@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="user-dashboard">
+        <h2>Welcome, <span id="user-name">User</span>!</h2>
+        <p>You have successfully logged in to your dashboard.</p>
+        
+        <div class="dashboard-content">
+            <div class="dashboard-card">
+                <h3>Your Account</h3>
+                <p>Manage your profile and settings</p>
+                <button class="dashboard-btn">View Profile</button>
+            </div>
+            
+            <div class="dashboard-card">
+                <h3>Activity</h3>
+                <p>Check your recent activities</p>
+                <button class="dashboard-btn">View Activity</button>
+            </div>
+            
+            <div class="dashboard-card">
+                <h3>Settings</h3>
+                <p>Configure your preferences</p>
+                <button class="dashboard-btn">Open Settings</button>
+            </div>
+        </div>
+        
+        <div class="links">
+            <a href="#" onclick="logout()" class="logout-btn">Logout</a>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+    <script>
+        // Authentication guard for user dashboard
+        async function checkUserAuthentication() {
+            const userType = localStorage.getItem('userType');
+            if (userType !== 'user') {
+                alert('Access denied. User login required.');
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            const isValid = await verifySession();
+            if (!isValid) {
+                alert('Session expired. Please login again.');
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            // Load user data
+            const username = localStorage.getItem('username');
+            if (username) {
+                document.getElementById("user-name").innerText = username;
+            }
+        }
+        
+        // Check authentication on page load
+        checkUserAuthentication();
+    </script>
+</body>
+</html>

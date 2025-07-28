@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Panel</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="admin-container">
+    <h2>Welcome, Admin</h2>
+    <div class="admin-dashboard">
+      <div class="user-count-card">
+        <h3>Total Registered Users</h3>
+        <p id="user-count">Loading...</p>
+      </div>
+      <div class="user-list">
+        <h3>Registered Users</h3>
+        <ul id="user-list">Loading...</ul>
+      </div>
+    </div>
+    
+    <div class="links">
+      <a href="#" onclick="logout()" class="logout-btn">Logout</a>
+      <a href="index.html">User Login</a>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+  <script>
+    // Admin authentication guard
+    async function checkAdminAuthentication() {
+        const userType = localStorage.getItem('userType');
+        if (userType !== 'admin') {
+            alert('Access denied. Admin login required.');
+            window.location.href = 'admin-login.html';
+            return false;
+        }
+        
+        const isValid = await verifySession();
+        if (!isValid) {
+            alert('Admin session expired. Please login again.');
+            window.location.href = 'admin-login.html';
+            return false;
+        }
+        
+        return true;
+    }
+    
+    // Load admin dashboard data
+    async function loadAdminData() {
+        if (!(await checkAdminAuthentication())) {
+            return;
+        }
+        
+        try {
+            const response = await authenticatedFetch(`${API_BASE_URL}/users`);
+            if (!response) return; // Already handled by authenticatedFetch
+            
+            const data = await response.json();
+            
+            document.getElementById("user-count").innerText = data.length;
+            const list = document.getElementById("user-list");
+            list.innerHTML = "";
+            data.forEach(username => {
+              const li = document.createElement("li");
+              li.innerText = username;
+              list.appendChild(li);
+            });
+        } catch (error) {
+            console.error('Error loading admin data:', error);
+            document.getElementById("user-count").innerText = "Error loading users";
+            document.getElementById("user-list").innerHTML = '<li>Unable to load user list</li>';
+        }
+    }
+    
+    // Load data on page load
+    loadAdminData();
+  </script>
+</body>
+</html>

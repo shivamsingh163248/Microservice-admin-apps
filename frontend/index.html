@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Login</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h2>User Login</h2>
+        <form id="userLoginForm">
+            <input type="text" id="userUsername" placeholder="Username" required><br>
+            <input type="password" id="userPassword" placeholder="Password" required><br>
+            <button type="submit">Login</button>
+        </form>
+        
+        <div class="links">
+            <a href="register.html">Register New User</a>
+            <a href="admin-login.html">Admin Login</a>
+        </div>
+    </div>
+    <script src="script.js"></script>
+    <script>
+        // Clear any existing sessions when visiting login page
+        localStorage.removeItem("authToken");
+        localStorage.removeItem("username");
+        localStorage.removeItem("userType");
+    </script>
+</body>
+</html>

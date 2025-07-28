@@ -1,0 +1,225 @@
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    line-height: 1.6;
+}
+
+.container {
+    max-width: 400px;
+    margin: 50px auto;
+    background: white;
+    padding: 30px;
+    border-radius: 8px;
+    box-shadow: 0 0 20px rgba(0,0,0,0.1);
+}
+
+/* Admin Panel Styles */
+.admin-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    background: white;
+    padding: 30px;
+    border-radius: 15px;
+    box-shadow: 0 0 20px rgba(0,0,0,0.1);
+}
+
+.admin-dashboard {
+    display: flex;
+    justify-content: space-around;
+    flex-wrap: wrap;
+    margin-top: 2rem;
+    gap: 20px;
+}
+
+.user-count-card, .user-list {
+    background: linear-gradient(135deg, #ff7e5f 0%, #feb47b 100%);
+    color: white;
+    padding: 2rem;
+    border-radius: 15px;
+    width: 300px;
+    margin: 1rem;
+    box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+    text-align: center;
+}
+
+.user-count-card h3, .user-list h3 {
+    margin-top: 0;
+    font-size: 1.5rem;
+}
+
+.user-count-card p {
+    font-size: 3rem;
+    font-weight: bold;
+    margin: 10px 0;
+}
+
+ul#user-list {
+    list-style-type: none;
+    padding-left: 0;
+    text-align: left;
+}
+
+ul#user-list li {
+    padding: 10px;
+    margin: 5px 0;
+    background: rgba(255,255,255,0.2);
+    border-radius: 8px;
+    border-left: 4px solid white;
+}
+
+/* User Dashboard Styles */
+.user-dashboard {
+    max-width: 1000px;
+    margin: 0 auto;
+    background: white;
+    padding: 30px;
+    border-radius: 15px;
+    box-shadow: 0 0 20px rgba(0,0,0,0.1);
+    text-align: center;
+}
+
+.user-dashboard h2 {
+    color: #333;
+    margin-bottom: 20px;
+    font-size: 2.5rem;
+}
+
+.dashboard-content {
+    display: flex;
+    justify-content: space-around;
+    flex-wrap: wrap;
+    margin: 30px 0;
+    gap: 20px;
+}
+
+.dashboard-card {
+    background: linear-gradient(135deg, #74b9ff 0%, #0984e3 100%);
+    color: white;
+    padding: 2rem;
+    border-radius: 15px;
+    width: 250px;
+    box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+    transition: transform 0.3s ease;
+}
+
+.dashboard-card:hover {
+    transform: translateY(-5px);
+}
+
+.dashboard-card h3 {
+    margin-top: 0;
+    font-size: 1.4rem;
+}
+
+.dashboard-btn {
+    background: white;
+    color: #0984e3;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 25px;
+    cursor: pointer;
+    font-weight: bold;
+    margin-top: 15px;
+    transition: all 0.3s ease;
+}
+
+.dashboard-btn:hover {
+    background: #f1f2f6;
+    transform: scale(1.05);
+}
+
+/* Original Form Styles */
+h2, h3 {
+    color: #333;
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+form {
+    background: transparent;
+    padding: 0;
+    border: none;
+}
+
+input[type="text"], input[type="password"] {
+    width: 100%;
+    padding: 12px;
+    margin: 10px 0;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    box-sizing: border-box;
+    font-size: 16px;
+}
+
+button {
+    width: 100%;
+    background: #007bff;
+    color: white;
+    padding: 12px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+    margin: 10px 0;
+    transition: background 0.3s ease;
+}
+
+button:hover {
+    background: #0056b3;
+}
+
+.links {
+    text-align: center;
+    margin-top: 20px;
+}
+
+.links a {
+    color: #007bff;
+    text-decoration: none;
+    margin: 0 10px;
+    display: inline-block;
+    padding: 5px 10px;
+    transition: color 0.3s ease;
+}
+
+.links a:hover {
+    text-decoration: underline;
+    color: #0056b3;
+}
+
+.logout-btn {
+    background: #dc3545;
+    color: white !important;
+    padding: 12px 30px;
+    border-radius: 25px;
+    text-decoration: none;
+    display: inline-block;
+    margin-top: 20px;
+    transition: all 0.3s ease;
+}
+
+.logout-btn:hover {
+    background: #c82333;
+    transform: scale(1.05);
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .admin-dashboard, .dashboard-content {
+        flex-direction: column;
+        align-items: center;
+    }
+    
+    .user-count-card, .user-list, .dashboard-card {
+        width: 90%;
+        margin: 10px 0;
+    }
+    
+    .container, .admin-container, .user-dashboard {
+        margin: 20px;
+        padding: 20px;
+    }
+}
