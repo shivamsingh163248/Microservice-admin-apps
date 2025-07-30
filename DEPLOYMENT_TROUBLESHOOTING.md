@@ -38,12 +38,40 @@ Port 8080 (Frontend) - Source: 0.0.0.0/0 (for users)
 Port 5000 (Backend) - Source: 0.0.0.0/0 (optional, for API access)
 ```
 
-### Issue 4: Ansible Playbook Path
+### Issue 4: Docker Compose Installation Error
 
-**Current Configuration**: ✅ Correct
-- Playbook: `ansible/deploy-production.yml`
-- Inventory: `ansible/inventory.ini`
-- Server: `production ansible_host=44.201.129.77`
+**Problem**: `No package matching 'docker-compose-plugin' is available`
+
+**Root Cause**: The `docker-compose-plugin` package is not available on older Ubuntu versions.
+
+**Solution**: ✅ **Fixed** - Updated Ansible playbook to install Docker Compose via pip instead.
+
+**What Changed**:
+```yaml
+# Before (causing error):
+- name: Install required packages
+  apt:
+    name:
+    - docker-compose-plugin
+
+# After (working solution):
+- name: Install required packages
+  apt:
+    name:
+    - python3-pip
+- name: Install Docker Compose using pip
+  pip:
+    name: docker-compose
+    executable: pip3
+```
+
+### Issue 5: Ansible Deprecation Warning
+
+**Problem**: `community.general.yaml has been deprecated`
+
+**Solution**: This is just a warning and doesn't affect functionality. To disable:
+1. The warning can be ignored - it doesn't break the deployment
+2. Or add `deprecation_warnings=False` to `ansible.cfg` if desired
 
 ## 🔍 Debug Steps
 

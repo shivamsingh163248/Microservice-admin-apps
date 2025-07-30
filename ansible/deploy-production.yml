@@ -33,12 +33,26 @@
     apt:
       name:
       - docker.io
-      - docker-compose-plugin
       - git
       - curl
       - unzip
+      - python3-pip
       state: present
     when: ansible_os_family == "Debian"
+
+  - name: Install Docker Compose using pip
+    pip:
+      name: docker-compose
+      executable: pip3
+    become: yes
+
+  - name: Verify Docker Compose installation
+    command: docker-compose --version
+    register: docker_compose_version
+
+  - name: Display Docker Compose version
+    debug:
+      msg: "Docker Compose installed: {{ docker_compose_version.stdout }}"
 
   - name: Start and enable Docker service
     systemd:
