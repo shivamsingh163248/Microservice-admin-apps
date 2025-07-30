@@ -40,10 +40,18 @@
       state: present
     when: ansible_os_family == "Debian"
 
-  - name: Install Docker Compose using pip
-    pip:
-      name: docker-compose
-      executable: pip3
+  - name: Download Docker Compose binary
+    get_url:
+      url: "https://github.com/docker/compose/releases/download/{{ docker_compose_version }}/docker-compose-linux-x86_64"
+      dest: /usr/local/bin/docker-compose
+      mode: '0755'
+    become: yes
+
+  - name: Create docker-compose symlink for compatibility
+    file:
+      src: /usr/local/bin/docker-compose
+      dest: /usr/bin/docker-compose
+      state: link
     become: yes
 
   - name: Verify Docker Compose installation

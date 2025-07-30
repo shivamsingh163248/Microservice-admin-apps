@@ -40,29 +40,27 @@ Port 5000 (Backend) - Source: 0.0.0.0/0 (optional, for API access)
 
 ### Issue 4: Docker Compose Installation Error
 
-**Problem**: `No package matching 'docker-compose-plugin' is available`
+**Problem 1**: `No package matching 'docker-compose-plugin' is available`
+**Solution**: ✅ **Fixed** - Removed docker-compose-plugin from apt packages.
 
-**Root Cause**: The `docker-compose-plugin` package is not available on older Ubuntu versions.
+**Problem 2**: `error: externally-managed-environment` when installing via pip
+**Root Cause**: Ubuntu 24.04 has stricter Python environment management (PEP 668).
 
-**Solution**: ✅ **Fixed** - Updated Ansible playbook to install Docker Compose via pip instead.
+**Solution**: ✅ **Fixed** - Updated to install Docker Compose using official binary download method.
 
 **What Changed**:
 ```yaml
-# Before (causing error):
-- name: Install required packages
-  apt:
-    name:
-    - docker-compose-plugin
-
-# After (working solution):
-- name: Install required packages
-  apt:
-    name:
-    - python3-pip
+# Before (causing pip error):
 - name: Install Docker Compose using pip
   pip:
     name: docker-compose
-    executable: pip3
+
+# After (working solution):
+- name: Download Docker Compose binary
+  get_url:
+    url: "https://github.com/docker/compose/releases/download/v2.21.0/docker-compose-linux-x86_64"
+    dest: /usr/local/bin/docker-compose
+    mode: '0755'
 ```
 
 ### Issue 5: Ansible Deprecation Warning
