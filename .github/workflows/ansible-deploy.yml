@@ -2,7 +2,7 @@ name: Build, Push, and Deploy Microservices
 
 on:
   push:
-    branches: [ main ]
+    branches: [ Ansible_Workflow ]
   workflow_dispatch:
 
 env:
