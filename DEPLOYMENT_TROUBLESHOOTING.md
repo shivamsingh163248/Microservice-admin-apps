@@ -63,7 +63,31 @@ Port 5000 (Backend) - Source: 0.0.0.0/0 (optional, for API access)
     mode: '0755'
 ```
 
-### Issue 5: Ansible Deprecation Warning
+### Issue 6: Docker Permission Denied Error
+
+**Problem**: `permission denied while trying to connect to the Docker daemon socket`
+
+**Root Cause**: User was added to docker group but SSH session needs to be refreshed for group membership to take effect.
+
+**Solution**: ✅ **Fixed** - Added `meta: reset_connection` step to refresh SSH session after adding user to docker group.
+
+**What Changed**:
+```yaml
+- name: Add user to docker group
+  user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: yes
+
+- name: Reset SSH connection to activate docker group membership
+  meta: reset_connection
+
+- name: Test Docker access
+  command: docker info
+  become_user: "{{ ansible_user }}"
+```
+
+### Issue 7: Ansible Deprecation Warning
 
 **Problem**: `community.general.yaml has been deprecated`
 

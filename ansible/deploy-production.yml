@@ -74,6 +74,27 @@
       groups: docker
       append: yes
 
+  - name: Reset SSH connection to activate docker group membership
+    meta: reset_connection
+
+  - name: Verify docker group membership
+    command: groups {{ ansible_user }}
+    register: user_groups
+
+  - name: Display user groups
+    debug:
+      msg: "User groups: {{ user_groups.stdout }}"
+
+  - name: Test Docker access
+    command: docker info
+    become_user: "{{ ansible_user }}"
+    register: docker_test
+    ignore_errors: yes
+
+  - name: Display Docker test result
+    debug:
+      msg: "Docker access: {{ 'SUCCESS' if docker_test.rc == 0 else 'FAILED - ' + docker_test.stderr }}"
+
   - name: Create application directory
     file:
       path: "{{ app_dir }}"
