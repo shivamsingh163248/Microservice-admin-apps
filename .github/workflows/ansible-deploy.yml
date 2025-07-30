@@ -80,13 +80,11 @@ jobs:
   deploy-with-ansible:
     needs: build-and-push
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/Ansible_Workflow'
 
     steps:
     - name: Checkout Repo
       uses: actions/checkout@v3
-      with:
-        ref: main  # Get the updated docker-compose files
 
     - name: Setup SSH
       uses: webfactory/ssh-agent@v0.8.0
@@ -103,8 +101,7 @@ jobs:
       run: |
         mkdir -p ~/.ssh
         # Add your server's SSH host key to avoid host verification prompts
-        # Uncomment and modify the line below with your actual server IP
-        # ssh-keyscan -H YOUR_SERVER_IP >> ~/.ssh/known_hosts
+        ssh-keyscan -H 44.201.129.77 >> ~/.ssh/known_hosts
 
     - name: Verify Ansible Inventory
       run: |
@@ -115,7 +112,7 @@ jobs:
     - name: Run Ansible Playbook
       run: |
         cd ansible
-        ansible-playbook -i inventory.ini deploy.yml \
+        ansible-playbook -i inventory.ini deploy-production.yml \
           --extra-vars "image_version=${{ needs.build-and-push.outputs.image_version }}" \
           --extra-vars "ghcr_owner=${{ github.repository_owner }}" \
           --extra-vars "ghcr_registry=${{ env.GHCR }}" \
