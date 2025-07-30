@@ -7,7 +7,7 @@ version: '3.8'
 services:
   database:
     # Using GitHub Packages MySQL image (or you can use the official MySQL image)
-    image: ghcr.io/shivamsingh163248/mysql_db:v1.0.5
+    image: ghcr.io/shivamsingh163248/mysql_db:v1.0.6
     # Fallback to official MySQL if GitHub package is not available
     # image: mysql:5.7
     container_name: mysql_db
@@ -31,7 +31,7 @@ services:
 
   backend:
     # Using GitHub Packages Flask backend image
-    image: ghcr.io/shivamsingh163248/flask_backend:v1.0.5
+    image: ghcr.io/shivamsingh163248/flask_backend:v1.0.6
     container_name: flask_backend
     restart: always
     environment:
@@ -49,7 +49,7 @@ services:
 
   frontend:
     # Using GitHub Packages Nginx frontend image
-    image: ghcr.io/shivamsingh163248/nginx_frontend:v1.0.5
+    image: ghcr.io/shivamsingh163248/nginx_frontend:v1.0.6
     container_name: nginx_frontend
     restart: always
     ports:
