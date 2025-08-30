@@ -1,0 +1,926 @@
+#!/usr/bin/env groovy
+
+pipeline {
+    agent any
+    
+    environment {
+        // Terraform configuration
+        TF_VAR_aws_region = 'us-east-1'
+        TF_VAR_environment = "${params.ENVIRONMENT}"
+        TF_VAR_app_name = 'microservice-admin-app'
+        
+        // AWS credentials
+        AWS_CREDENTIALS = credentials('aws-credentials')
+        
+        // Terraform workspace
+        TF_WORKSPACE = "${params.ENVIRONMENT}"
+        
+        // Application configuration
+        APP_NAME = 'microservice-admin-app'
+    }
+    
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'production'],
+            description: 'Target environment for infrastructure'
+        )
+        choice(
+            name: 'ACTION',
+            choices: ['plan', 'apply', 'destroy'],
+            description: 'Terraform action to perform'
+        )
+        string(
+            name: 'INSTANCE_TYPE',
+            defaultValue: 't3.medium',
+            description: 'EC2 instance type'
+        )
+        string(
+            name: 'KEY_PAIR_NAME',
+            defaultValue: 'aws-microservice-key',
+            description: 'AWS EC2 Key Pair name'
+        )
+        booleanParam(
+            name: 'AUTO_APPROVE',
+            defaultValue: false,
+            description: 'Auto-approve Terraform apply (use with caution)'
+        )
+        booleanParam(
+            name: 'TRIGGER_DEPLOYMENT',
+            defaultValue: false,
+            description: 'Trigger application deployment after infrastructure is ready'
+        )
+    }
+    
+    stages {
+        stage('🔍 Preparation') {
+            steps {
+                script {
+                    echo "🚀 Starting Terraform Infrastructure Pipeline"
+                    echo "🎯 Environment: ${params.ENVIRONMENT}"
+                    echo "⚡ Action: ${params.ACTION}"
+                    echo "💻 Instance Type: ${params.INSTANCE_TYPE}"
+                    
+                    // Validate parameters
+                    if (params.ACTION == 'destroy' && params.ENVIRONMENT == 'production') {
+                        if (!params.AUTO_APPROVE) {
+                            input message: '⚠️ Are you sure you want to DESTROY production infrastructure?',
+                                  ok: 'Yes, destroy production',
+                                  submitterParameter: 'APPROVED_BY'
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('🔧 Setup Terraform') {
+            steps {
+                script {
+                    // Install/update Terraform
+                    sh """
+                        # Check if Terraform is installed
+                        if ! command -v terraform &> /dev/null; then
+                            echo "Installing Terraform..."
+                            wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor | sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg
+                            echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+                            sudo apt update && sudo apt install terraform
+                        fi
+                        
+                        terraform version
+                    """
+                    
+                    // Setup AWS credentials
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials']]) {
+                        sh """
+                            aws configure set aws_access_key_id ${AWS_ACCESS_KEY_ID}
+                            aws configure set aws_secret_access_key ${AWS_SECRET_ACCESS_KEY}
+                            aws configure set default.region ${TF_VAR_aws_region}
+                            
+                            # Verify AWS connection
+                            aws sts get-caller-identity
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('📋 Generate Terraform Configuration') {
+            steps {
+                script {
+                    // Create main.tf
+                    writeFile file: 'terraform/main.tf', text: '''
+terraform {
+  required_version = ">= 1.0"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+  
+  backend "s3" {
+    bucket = "microservice-terraform-state-bucket"
+    key    = "environments/${var.environment}/terraform.tfstate"
+    region = "us-east-1"
+    
+    # Enable state locking
+    dynamodb_table = "terraform-state-lock"
+    encrypt        = true
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+  
+  default_tags {
+    tags = {
+      Environment = var.environment
+      Application = var.app_name
+      ManagedBy   = "Terraform"
+      CreatedBy   = "Jenkins"
+    }
+  }
+}
+
+# Data sources
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["099720109477"] # Canonical
+  
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-24.04-amd64-server-*"]
+  }
+  
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+# VPC
+resource "aws_vpc" "main" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+  
+  tags = {
+    Name = "${var.app_name}-vpc-${var.environment}"
+  }
+}
+
+# Internet Gateway
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+  
+  tags = {
+    Name = "${var.app_name}-igw-${var.environment}"
+  }
+}
+
+# Subnets
+resource "aws_subnet" "public" {
+  count = 2
+  
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = cidrsubnet(var.vpc_cidr, 8, count.index + 1)
+  availability_zone       = data.aws_availability_zones.available.names[count.index]
+  map_public_ip_on_launch = true
+  
+  tags = {
+    Name = "${var.app_name}-public-subnet-${count.index + 1}-${var.environment}"
+    Type = "Public"
+  }
+}
+
+# Route Table
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+  
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id
+  }
+  
+  tags = {
+    Name = "${var.app_name}-public-rt-${var.environment}"
+  }
+}
+
+# Route Table Association
+resource "aws_route_table_association" "public" {
+  count = length(aws_subnet.public)
+  
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
+}
+
+# Security Group
+resource "aws_security_group" "app_sg" {
+  name_prefix = "${var.app_name}-sg-${var.environment}"
+  vpc_id      = aws_vpc.main.id
+  
+  # SSH
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "SSH access"
+  }
+  
+  # HTTP
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTP access"
+  }
+  
+  # HTTPS
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTPS access"
+  }
+  
+  # Frontend
+  ingress {
+    from_port   = 8081
+    to_port     = 8081
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "Frontend application"
+  }
+  
+  # Backend API
+  ingress {
+    from_port   = 5001
+    to_port     = 5001
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "Backend API"
+  }
+  
+  # MySQL (restricted to VPC)
+  ingress {
+    from_port   = 3306
+    to_port     = 3306
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+    description = "MySQL database"
+  }
+  
+  # All outbound traffic
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "All outbound traffic"
+  }
+  
+  tags = {
+    Name = "${var.app_name}-sg-${var.environment}"
+  }
+}
+
+# Application Load Balancer
+resource "aws_lb" "app_lb" {
+  name               = "${var.app_name}-alb-${var.environment}"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.app_sg.id]
+  subnets            = aws_subnet.public[*].id
+  
+  enable_deletion_protection = var.environment == "production" ? true : false
+  
+  tags = {
+    Name = "${var.app_name}-alb-${var.environment}"
+  }
+}
+
+# Target Group for Frontend
+resource "aws_lb_target_group" "frontend_tg" {
+  name     = "${var.app_name}-frontend-tg-${var.environment}"
+  port     = 8081
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.main.id
+  
+  health_check {
+    enabled             = true
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    timeout             = 5
+    interval            = 30
+    path                = "/"
+    matcher             = "200"
+    port                = "traffic-port"
+    protocol            = "HTTP"
+  }
+  
+  tags = {
+    Name = "${var.app_name}-frontend-tg-${var.environment}"
+  }
+}
+
+# Target Group for Backend API
+resource "aws_lb_target_group" "backend_tg" {
+  name     = "${var.app_name}-backend-tg-${var.environment}"
+  port     = 5001
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.main.id
+  
+  health_check {
+    enabled             = true
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    timeout             = 5
+    interval            = 30
+    path                = "/health"
+    matcher             = "200"
+    port                = "traffic-port"
+    protocol            = "HTTP"
+  }
+  
+  tags = {
+    Name = "${var.app_name}-backend-tg-${var.environment}"
+  }
+}
+
+# ALB Listener
+resource "aws_lb_listener" "app_listener" {
+  load_balancer_arn = aws_lb.app_lb.arn
+  port              = "80"
+  protocol          = "HTTP"
+  
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.frontend_tg.arn
+  }
+}
+
+# ALB Listener Rule for API
+resource "aws_lb_listener_rule" "api_rule" {
+  listener_arn = aws_lb_listener.app_listener.arn
+  priority     = 100
+  
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.backend_tg.arn
+  }
+  
+  condition {
+    path_pattern {
+      values = ["/api/*", "/health"]
+    }
+  }
+}
+
+# Launch Template
+resource "aws_launch_template" "app_lt" {
+  name_prefix   = "${var.app_name}-lt-${var.environment}"
+  image_id      = data.aws_ami.ubuntu.id
+  instance_type = var.instance_type
+  key_name      = var.key_pair_name
+  
+  vpc_security_group_ids = [aws_security_group.app_sg.id]
+  
+  user_data = base64encode(templatefile("${path.module}/user_data.sh", {
+    environment = var.environment
+    app_name    = var.app_name
+  }))
+  
+  tag_specifications {
+    resource_type = "instance"
+    tags = {
+      Name = "${var.app_name}-instance-${var.environment}"
+    }
+  }
+  
+  tags = {
+    Name = "${var.app_name}-lt-${var.environment}"
+  }
+}
+
+# Auto Scaling Group
+resource "aws_autoscaling_group" "app_asg" {
+  name                = "${var.app_name}-asg-${var.environment}"
+  vpc_zone_identifier = aws_subnet.public[*].id
+  target_group_arns   = [aws_lb_target_group.frontend_tg.arn, aws_lb_target_group.backend_tg.arn]
+  health_check_type   = "ELB"
+  health_check_grace_period = 300
+  
+  min_size         = var.environment == "production" ? 2 : 1
+  max_size         = var.environment == "production" ? 6 : 2
+  desired_capacity = var.environment == "production" ? 2 : 1
+  
+  launch_template {
+    id      = aws_launch_template.app_lt.id
+    version = "$Latest"
+  }
+  
+  tag {
+    key                 = "Name"
+    value               = "${var.app_name}-asg-${var.environment}"
+    propagate_at_launch = false
+  }
+  
+  tag {
+    key                 = "Environment"
+    value               = var.environment
+    propagate_at_launch = true
+  }
+}
+
+# RDS Subnet Group
+resource "aws_db_subnet_group" "app_db_subnet_group" {
+  name       = "${var.app_name}-db-subnet-group-${var.environment}"
+  subnet_ids = aws_subnet.public[*].id
+  
+  tags = {
+    Name = "${var.app_name}-db-subnet-group-${var.environment}"
+  }
+}
+
+# RDS Instance (optional, for production)
+resource "aws_db_instance" "app_db" {
+  count = var.use_rds ? 1 : 0
+  
+  identifier = "${var.app_name}-db-${var.environment}"
+  
+  engine         = "mysql"
+  engine_version = "8.0"
+  instance_class = var.environment == "production" ? "db.t3.medium" : "db.t3.micro"
+  
+  allocated_storage     = 20
+  max_allocated_storage = 100
+  storage_type          = "gp2"
+  storage_encrypted     = true
+  
+  db_name  = "adminapp"
+  username = "adminuser"
+  password = var.db_password
+  
+  vpc_security_group_ids = [aws_security_group.app_sg.id]
+  db_subnet_group_name   = aws_db_subnet_group.app_db_subnet_group.name
+  
+  backup_retention_period = var.environment == "production" ? 7 : 1
+  backup_window          = "03:00-04:00"
+  maintenance_window     = "Sun:04:00-Sun:05:00"
+  
+  skip_final_snapshot = var.environment != "production"
+  deletion_protection = var.environment == "production"
+  
+  tags = {
+    Name = "${var.app_name}-db-${var.environment}"
+  }
+}
+'''
+                    
+                    // Create variables.tf
+                    writeFile file: 'terraform/variables.tf', text: '''
+variable "aws_region" {
+  description = "AWS region"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "environment" {
+  description = "Environment name"
+  type        = string
+  validation {
+    condition     = contains(["dev", "staging", "production"], var.environment)
+    error_message = "Environment must be dev, staging, or production."
+  }
+}
+
+variable "app_name" {
+  description = "Application name"
+  type        = string
+  default     = "microservice-admin-app"
+}
+
+variable "vpc_cidr" {
+  description = "CIDR block for VPC"
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "instance_type" {
+  description = "EC2 instance type"
+  type        = string
+  default     = "t3.medium"
+}
+
+variable "key_pair_name" {
+  description = "AWS EC2 Key Pair name"
+  type        = string
+  default     = "aws-microservice-key"
+}
+
+variable "use_rds" {
+  description = "Use RDS instead of containerized MySQL"
+  type        = bool
+  default     = false
+}
+
+variable "db_password" {
+  description = "Database password"
+  type        = string
+  default     = "adminpass"
+  sensitive   = true
+}
+'''
+                    
+                    // Create outputs.tf
+                    writeFile file: 'terraform/outputs.tf', text: '''
+output "vpc_id" {
+  description = "VPC ID"
+  value       = aws_vpc.main.id
+}
+
+output "subnet_ids" {
+  description = "Public subnet IDs"
+  value       = aws_subnet.public[*].id
+}
+
+output "security_group_id" {
+  description = "Security group ID"
+  value       = aws_security_group.app_sg.id
+}
+
+output "load_balancer_dns" {
+  description = "Load balancer DNS name"
+  value       = aws_lb.app_lb.dns_name
+}
+
+output "load_balancer_zone_id" {
+  description = "Load balancer zone ID"
+  value       = aws_lb.app_lb.zone_id
+}
+
+output "autoscaling_group_name" {
+  description = "Auto Scaling Group name"
+  value       = aws_autoscaling_group.app_asg.name
+}
+
+output "launch_template_id" {
+  description = "Launch template ID"
+  value       = aws_launch_template.app_lt.id
+}
+
+output "rds_endpoint" {
+  description = "RDS endpoint"
+  value       = var.use_rds ? aws_db_instance.app_db[0].endpoint : "Not using RDS"
+}
+
+output "frontend_url" {
+  description = "Frontend application URL"
+  value       = "http://${aws_lb.app_lb.dns_name}"
+}
+
+output "backend_api_url" {
+  description = "Backend API URL"
+  value       = "http://${aws_lb.app_lb.dns_name}/api"
+}
+
+output "environment_info" {
+  description = "Environment information"
+  value = {
+    environment    = var.environment
+    region        = var.aws_region
+    instance_type = var.instance_type
+    vpc_cidr      = var.vpc_cidr
+  }
+}
+'''
+                    
+                    // Create user_data.sh
+                    writeFile file: 'terraform/user_data.sh', text: '''#!/bin/bash
+
+# Update system
+apt-get update -y
+apt-get upgrade -y
+
+# Install Docker
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+apt-get update -y
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+# Start Docker service
+systemctl start docker
+systemctl enable docker
+
+# Add ubuntu user to docker group
+usermod -aG docker ubuntu
+
+# Install Docker Compose
+curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+chmod +x /usr/local/bin/docker-compose
+
+# Create application directory
+mkdir -p /opt/${app_name}
+chown ubuntu:ubuntu /opt/${app_name}
+
+# Install CloudWatch agent (for monitoring)
+wget https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
+dpkg -i -E ./amazon-cloudwatch-agent.deb
+
+# Install Ansible for deployment automation
+apt-get install -y python3-pip
+pip3 install ansible
+
+# Create a simple health check script
+cat > /opt/health_check.sh << 'EOL'
+#!/bin/bash
+# Simple health check for the application
+if curl -f http://localhost:8081 && curl -f http://localhost:5001/health; then
+    echo "Application is healthy"
+    exit 0
+else
+    echo "Application is unhealthy"
+    exit 1
+fi
+EOL
+
+chmod +x /opt/health_check.sh
+
+# Setup CloudWatch logs
+cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << EOL
+{
+    "logs": {
+        "logs_collected": {
+            "files": {
+                "collect_list": [
+                    {
+                        "file_path": "/opt/${app_name}/logs/*.log",
+                        "log_group_name": "${app_name}-${environment}",
+                        "log_stream_name": "{instance_id}"
+                    }
+                ]
+            }
+        }
+    }
+}
+EOL
+
+# Signal that the instance is ready
+/opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource AutoScalingGroup --region ${AWS::Region} || true
+
+echo "User data script completed successfully"
+'''
+                }
+            }
+        }
+        
+        stage('🔧 Terraform Init') {
+            steps {
+                script {
+                    dir('terraform') {
+                        sh """
+                            # Initialize Terraform
+                            terraform init
+                            
+                            # Select or create workspace
+                            terraform workspace select ${TF_WORKSPACE} || terraform workspace new ${TF_WORKSPACE}
+                            
+                            # Show current workspace
+                            terraform workspace show
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('📋 Terraform Plan') {
+            steps {
+                script {
+                    dir('terraform') {
+                        sh """
+                            # Generate Terraform plan
+                            terraform plan \\
+                                -var="environment=${params.ENVIRONMENT}" \\
+                                -var="instance_type=${params.INSTANCE_TYPE}" \\
+                                -var="key_pair_name=${params.KEY_PAIR_NAME}" \\
+                                -out=tfplan
+                        """
+                        
+                        // Archive the plan
+                        archiveArtifacts artifacts: 'tfplan'
+                    }
+                }
+            }
+        }
+        
+        stage('🚀 Terraform Apply/Destroy') {
+            when {
+                expression { params.ACTION != 'plan' }
+            }
+            steps {
+                script {
+                    dir('terraform') {
+                        if (params.ACTION == 'apply') {
+                            if (!params.AUTO_APPROVE && params.ENVIRONMENT == 'production') {
+                                input message: "Review the plan and approve to apply infrastructure changes for ${params.ENVIRONMENT}",
+                                      ok: 'Apply Changes'
+                            }
+                            
+                            sh """
+                                # Apply Terraform plan
+                                terraform apply ${params.AUTO_APPROVE ? '-auto-approve' : ''} tfplan
+                            """
+                            
+                        } else if (params.ACTION == 'destroy') {
+                            sh """
+                                # Destroy infrastructure
+                                terraform destroy \\
+                                    -var="environment=${params.ENVIRONMENT}" \\
+                                    -var="instance_type=${params.INSTANCE_TYPE}" \\
+                                    -var="key_pair_name=${params.KEY_PAIR_NAME}" \\
+                                    ${params.AUTO_APPROVE ? '-auto-approve' : ''}
+                            """
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('📊 Get Infrastructure Outputs') {
+            when {
+                expression { params.ACTION == 'apply' }
+            }
+            steps {
+                script {
+                    dir('terraform') {
+                        // Get Terraform outputs
+                        def outputs = sh(
+                            script: 'terraform output -json',
+                            returnStdout: true
+                        ).trim()
+                        
+                        writeFile file: 'terraform-outputs.json', text: outputs
+                        archiveArtifacts artifacts: 'terraform-outputs.json'
+                        
+                        // Display key outputs
+                        sh """
+                            echo "📊 Infrastructure Information:"
+                            echo "=============================="
+                            terraform output
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('✅ Infrastructure Validation') {
+            when {
+                expression { params.ACTION == 'apply' }
+            }
+            steps {
+                script {
+                    echo "✅ Validating infrastructure..."
+                    
+                    dir('terraform') {
+                        // Get load balancer DNS
+                        def lbDns = sh(
+                            script: 'terraform output -raw load_balancer_dns',
+                            returnStdout: true
+                        ).trim()
+                        
+                        echo "🌐 Load Balancer DNS: ${lbDns}"
+                        
+                        // Wait for load balancer to be ready
+                        echo "⏳ Waiting for load balancer to be ready..."
+                        sleep(60)
+                        
+                        // Basic connectivity test
+                        sh """
+                            # Test load balancer connectivity
+                            for i in {1..10}; do
+                                if curl -s -o /dev/null -w "%{http_code}" http://${lbDns} | grep -q "200\\|404"; then
+                                    echo "✅ Load balancer is responding"
+                                    break
+                                fi
+                                echo "⏳ Attempt \$i: Load balancer not ready yet..."
+                                sleep 30
+                            done
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('📋 Generate Infrastructure Report') {
+            when {
+                expression { params.ACTION == 'apply' }
+            }
+            steps {
+                script {
+                    dir('terraform') {
+                        // Generate comprehensive infrastructure report
+                        def lbDns = sh(
+                            script: 'terraform output -raw load_balancer_dns',
+                            returnStdout: true
+                        ).trim()
+                        
+                        writeFile file: 'infrastructure-report.txt', text: """
+🏗️ Infrastructure Deployment Report
+==================================
+Environment: ${params.ENVIRONMENT}
+Action: ${params.ACTION}
+Instance Type: ${params.INSTANCE_TYPE}
+Key Pair: ${params.KEY_PAIR_NAME}
+Timestamp: ${new Date()}
+
+🌐 Infrastructure URLs:
+- Load Balancer: http://${lbDns}
+- Frontend: http://${lbDns}
+- Backend API: http://${lbDns}/api
+
+📊 AWS Resources Created:
+- VPC with public subnets
+- Application Load Balancer
+- Auto Scaling Group
+- Launch Template
+- Security Groups
+- Target Groups
+
+🎯 Next Steps:
+1. Deploy application using Ansible pipeline
+2. Configure DNS (optional)
+3. Setup SSL certificate (for production)
+4. Configure monitoring and alerts
+
+✅ Infrastructure Status: READY
+"""
+                        
+                        archiveArtifacts artifacts: 'infrastructure-report.txt'
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                echo "🧹 Cleaning up temporary files..."
+                // Cleanup can be added here if needed
+            }
+        }
+        
+        success {
+            script {
+                if (params.ACTION == 'apply') {
+                    echo "✅ Infrastructure deployment completed successfully!"
+                    echo "🎉 Environment '${params.ENVIRONMENT}' is ready"
+                    
+                    if (params.TRIGGER_DEPLOYMENT) {
+                        echo "🚀 Triggering application deployment..."
+                        // Trigger deployment pipeline
+                        build job: 'ansible-deployment-pipeline',
+                              parameters: [
+                                  string(name: 'ENVIRONMENT', value: params.ENVIRONMENT),
+                                  string(name: 'REGISTRY_SOURCE', value: 'github')
+                              ],
+                              wait: false
+                    }
+                } else if (params.ACTION == 'destroy') {
+                    echo "🗑️ Infrastructure destroyed successfully"
+                } else {
+                    echo "📋 Terraform plan completed successfully"
+                }
+            }
+        }
+        
+        failure {
+            script {
+                echo "❌ Terraform pipeline failed!"
+                echo "🔍 Check logs for detailed error information"
+                
+                // Create failure report
+                writeFile file: 'terraform-failure.txt', text: """
+❌ Terraform Infrastructure Pipeline Failed
+==========================================
+Environment: ${params.ENVIRONMENT}
+Action: ${params.ACTION}
+Failed at: ${new Date()}
+
+🔍 Check Jenkins logs for detailed error information
+📧 Manual intervention required
+"""
+                
+                archiveArtifacts artifacts: 'terraform-failure.txt'
+            }
+        }
+    }
+}

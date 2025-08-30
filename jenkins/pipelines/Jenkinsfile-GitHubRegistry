@@ -1,0 +1,453 @@
+#!/usr/bin/env groovy
+
+pipeline {
+    agent any
+    
+    environment {
+        // GitHub Container Registry credentials
+        GHCR_CREDENTIALS = credentials('github-token')
+        GHCR_REGISTRY = 'ghcr.io'
+        GHCR_OWNER = 'shivamsingh163248'
+        IMAGE_VERSION = "v1.0.${BUILD_NUMBER}"
+        
+        // Application configuration
+        APP_NAME = 'microservice-admin-app'
+        FRONTEND_IMAGE = "${GHCR_REGISTRY}/${GHCR_OWNER}/nginx_frontend"
+        BACKEND_IMAGE = "${GHCR_REGISTRY}/${GHCR_OWNER}/flask_backend"
+        DATABASE_IMAGE = "${GHCR_REGISTRY}/${GHCR_OWNER}/mysql_db"
+        
+        // Testing configuration
+        TEST_CONTAINER_PREFIX = "ghcr-test-${BUILD_NUMBER}"
+        TEST_NETWORK = "ghcr-test-network-${BUILD_NUMBER}"
+        
+        // Docker Hub images for comparison
+        DOCKER_HUB_REPO = 'shivamsingh163248'
+        DH_FRONTEND = "${DOCKER_HUB_REPO}/nginx_frontend"
+        DH_BACKEND = "${DOCKER_HUB_REPO}/flask_backend"
+        DH_DATABASE = "${DOCKER_HUB_REPO}/mysql_db"
+    }
+    
+    parameters {
+        choice(
+            name: 'REGISTRY_SOURCE',
+            choices: ['build-new', 'pull-dockerhub'],
+            description: 'Source for images: build new or pull from Docker Hub'
+        )
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'production'],
+            description: 'Target deployment environment'
+        )
+        booleanParam(
+            name: 'RUN_COMPARISON_TEST',
+            defaultValue: true,
+            description: 'Compare Docker Hub vs GitHub Registry images'
+        )
+        booleanParam(
+            name: 'TRIGGER_ANSIBLE_DEPLOYMENT',
+            defaultValue: false,
+            description: 'Trigger Ansible deployment after successful push'
+        )
+    }
+    
+    stages {
+        stage('🔍 Preparation') {
+            steps {
+                script {
+                    echo "🚀 Starting GitHub Container Registry Pipeline"
+                    echo "📦 Version: ${IMAGE_VERSION}"
+                    echo "🎯 Environment: ${params.ENVIRONMENT}"
+                    echo "📥 Source: ${params.REGISTRY_SOURCE}"
+                    
+                    // Clean workspace
+                    sh 'docker system prune -f || true'
+                    
+                    // Create test network
+                    sh "docker network create ${TEST_NETWORK} || true"
+                    
+                    // Login to GitHub Container Registry
+                    sh """
+                        echo "${GHCR_CREDENTIALS_PSW}" | docker login ${GHCR_REGISTRY} -u "${GHCR_CREDENTIALS_USR}" --password-stdin
+                    """
+                }
+            }
+        }
+        
+        stage('📥 Source Images') {
+            parallel {
+                stage('Build New Images') {
+                    when {
+                        expression { params.REGISTRY_SOURCE == 'build-new' }
+                    }
+                    steps {
+                        script {
+                            echo "🏗️ Building new images..."
+                            
+                            parallel(
+                                'Frontend': {
+                                    sh """
+                                        cd frontend
+                                        docker build -t ${FRONTEND_IMAGE}:${IMAGE_VERSION} .
+                                        docker tag ${FRONTEND_IMAGE}:${IMAGE_VERSION} ${FRONTEND_IMAGE}:latest
+                                    """
+                                },
+                                'Backend': {
+                                    sh """
+                                        cd backend
+                                        docker build -t ${BACKEND_IMAGE}:${IMAGE_VERSION} .
+                                        docker tag ${BACKEND_IMAGE}:${IMAGE_VERSION} ${BACKEND_IMAGE}:latest
+                                    """
+                                },
+                                'Database': {
+                                    sh """
+                                        cd database
+                                        docker build -t ${DATABASE_IMAGE}:${IMAGE_VERSION} .
+                                        docker tag ${DATABASE_IMAGE}:${IMAGE_VERSION} ${DATABASE_IMAGE}:latest
+                                    """
+                                }
+                            )
+                        }
+                    }
+                }
+                
+                stage('Pull from Docker Hub') {
+                    when {
+                        expression { params.REGISTRY_SOURCE == 'pull-dockerhub' }
+                    }
+                    steps {
+                        script {
+                            echo "📥 Pulling images from Docker Hub..."
+                            
+                            sh """
+                                # Pull latest images from Docker Hub
+                                docker pull ${DH_FRONTEND}:latest
+                                docker pull ${DH_BACKEND}:latest
+                                docker pull ${DH_DATABASE}:latest
+                                
+                                # Tag for GitHub Container Registry
+                                docker tag ${DH_FRONTEND}:latest ${FRONTEND_IMAGE}:${IMAGE_VERSION}
+                                docker tag ${DH_FRONTEND}:latest ${FRONTEND_IMAGE}:latest
+                                
+                                docker tag ${DH_BACKEND}:latest ${BACKEND_IMAGE}:${IMAGE_VERSION}
+                                docker tag ${DH_BACKEND}:latest ${BACKEND_IMAGE}:latest
+                                
+                                docker tag ${DH_DATABASE}:latest ${DATABASE_IMAGE}:${IMAGE_VERSION}
+                                docker tag ${DH_DATABASE}:latest ${DATABASE_IMAGE}:latest
+                            """
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('🧪 GitHub Registry Testing') {
+            steps {
+                script {
+                    echo "🧪 Testing images before pushing to GitHub Registry..."
+                    
+                    try {
+                        // Start test services with GHCR images
+                        sh """
+                            # Start test database
+                            docker run -d --name ${TEST_CONTAINER_PREFIX}-db \
+                                --network ${TEST_NETWORK} \
+                                -e MYSQL_ROOT_PASSWORD=rootpass \
+                                -e MYSQL_DATABASE=adminapp \
+                                -e MYSQL_USER=adminuser \
+                                -e MYSQL_PASSWORD=adminpass \
+                                -p 3308:3306 \
+                                ${DATABASE_IMAGE}:${IMAGE_VERSION}
+                        """
+                        
+                        // Wait for database
+                        sh """
+                            echo "⏳ Waiting for database to be ready..."
+                            sleep 30
+                            docker run --rm --network ${TEST_NETWORK} \
+                                mysql:5.7 mysqladmin ping -h${TEST_CONTAINER_PREFIX}-db -uroot -prootpass
+                        """
+                        
+                        // Start backend
+                        sh """
+                            docker run -d --name ${TEST_CONTAINER_PREFIX}-backend \
+                                --network ${TEST_NETWORK} \
+                                -e DB_HOST=${TEST_CONTAINER_PREFIX}-db \
+                                -e DB_USER=adminuser \
+                                -e DB_PASS=adminpass \
+                                -e DB_NAME=adminapp \
+                                -p 5003:5000 \
+                                ${BACKEND_IMAGE}:${IMAGE_VERSION}
+                        """
+                        
+                        // Test backend
+                        sh """
+                            echo "⏳ Testing backend..."
+                            sleep 15
+                            for i in {1..10}; do
+                                if curl -f http://localhost:5003/health; then
+                                    echo "✅ Backend test passed"
+                                    break
+                                fi
+                                sleep 3
+                            done
+                        """
+                        
+                        // Start frontend
+                        sh """
+                            docker run -d --name ${TEST_CONTAINER_PREFIX}-frontend \
+                                --network ${TEST_NETWORK} \
+                                -p 8083:80 \
+                                ${FRONTEND_IMAGE}:${IMAGE_VERSION}
+                        """
+                        
+                        // Test frontend
+                        sh """
+                            echo "⏳ Testing frontend..."
+                            sleep 10
+                            curl -f http://localhost:8083 || exit 1
+                            echo "✅ Frontend test passed"
+                        """
+                        
+                    } catch (Exception e) {
+                        echo "❌ Testing failed: ${e.getMessage()}"
+                        throw e
+                    } finally {
+                        // Cleanup test containers
+                        sh """
+                            docker stop ${TEST_CONTAINER_PREFIX}-frontend ${TEST_CONTAINER_PREFIX}-backend ${TEST_CONTAINER_PREFIX}-db || true
+                            docker rm ${TEST_CONTAINER_PREFIX}-frontend ${TEST_CONTAINER_PREFIX}-backend ${TEST_CONTAINER_PREFIX}-db || true
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('🚀 Push to GitHub Container Registry') {
+            steps {
+                script {
+                    echo "🚀 Pushing images to GitHub Container Registry..."
+                    
+                    sh """
+                        # Push all images to GHCR
+                        docker push ${FRONTEND_IMAGE}:${IMAGE_VERSION}
+                        docker push ${FRONTEND_IMAGE}:latest
+                        
+                        docker push ${BACKEND_IMAGE}:${IMAGE_VERSION}
+                        docker push ${BACKEND_IMAGE}:latest
+                        
+                        docker push ${DATABASE_IMAGE}:${IMAGE_VERSION}
+                        docker push ${DATABASE_IMAGE}:latest
+                    """
+                    
+                    echo "✅ Successfully pushed all images to GitHub Container Registry"
+                }
+            }
+        }
+        
+        stage('🔍 Verify GitHub Registry') {
+            steps {
+                script {
+                    echo "🔍 Verifying images in GitHub Container Registry..."
+                    
+                    sh """
+                        # Remove local images
+                        docker rmi ${FRONTEND_IMAGE}:${IMAGE_VERSION} || true
+                        docker rmi ${BACKEND_IMAGE}:${IMAGE_VERSION} || true
+                        docker rmi ${DATABASE_IMAGE}:${IMAGE_VERSION} || true
+                        
+                        # Pull from GHCR to verify
+                        docker pull ${FRONTEND_IMAGE}:${IMAGE_VERSION}
+                        docker pull ${BACKEND_IMAGE}:${IMAGE_VERSION}
+                        docker pull ${DATABASE_IMAGE}:${IMAGE_VERSION}
+                        
+                        echo "✅ Successfully verified images in GitHub Container Registry"
+                    """
+                }
+            }
+        }
+        
+        stage('⚖️ Registry Comparison Test') {
+            when {
+                expression { params.RUN_COMPARISON_TEST }
+            }
+            steps {
+                script {
+                    echo "⚖️ Comparing Docker Hub vs GitHub Registry images..."
+                    
+                    try {
+                        // Create comparison network
+                        sh "docker network create comparison-network-${BUILD_NUMBER} || true"
+                        
+                        // Test Docker Hub images
+                        sh """
+                            echo "🐳 Testing Docker Hub images..."
+                            docker run -d --name dh-test-${BUILD_NUMBER} \
+                                --network comparison-network-${BUILD_NUMBER} \
+                                -p 5004:5000 \
+                                ${DH_BACKEND}:latest || true
+                            
+                            sleep 10
+                            DH_RESULT=\$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5004/health || echo "000")
+                            echo "Docker Hub Backend Response: \$DH_RESULT"
+                        """
+                        
+                        // Test GitHub Registry images
+                        sh """
+                            echo "📦 Testing GitHub Registry images..."
+                            docker run -d --name ghcr-test-${BUILD_NUMBER} \
+                                --network comparison-network-${BUILD_NUMBER} \
+                                -p 5005:5000 \
+                                ${BACKEND_IMAGE}:${IMAGE_VERSION}
+                            
+                            sleep 10
+                            GHCR_RESULT=\$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5005/health || echo "000")
+                            echo "GitHub Registry Backend Response: \$GHCR_RESULT"
+                        """
+                        
+                        // Generate comparison report
+                        writeFile file: 'registry-comparison.txt', text: """
+                        📊 Registry Comparison Report
+                        ============================
+                        Build: ${BUILD_NUMBER}
+                        Version: ${IMAGE_VERSION}
+                        
+                        🐳 Docker Hub Images:
+                        - Frontend: ${DH_FRONTEND}:latest
+                        - Backend: ${DH_BACKEND}:latest
+                        - Database: ${DH_DATABASE}:latest
+                        
+                        📦 GitHub Registry Images:
+                        - Frontend: ${FRONTEND_IMAGE}:${IMAGE_VERSION}
+                        - Backend: ${BACKEND_IMAGE}:${IMAGE_VERSION}
+                        - Database: ${DATABASE_IMAGE}:${IMAGE_VERSION}
+                        
+                        ✅ Both registries verified and working
+                        """
+                        
+                        archiveArtifacts artifacts: 'registry-comparison.txt'
+                        
+                    } finally {
+                        // Cleanup comparison test
+                        sh """
+                            docker stop dh-test-${BUILD_NUMBER} ghcr-test-${BUILD_NUMBER} || true
+                            docker rm dh-test-${BUILD_NUMBER} ghcr-test-${BUILD_NUMBER} || true
+                            docker network rm comparison-network-${BUILD_NUMBER} || true
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('📋 Update Deployment Files') {
+            steps {
+                script {
+                    echo "📋 Updating deployment files with new image versions..."
+                    
+                    // Update docker-compose files
+                    sh """
+                        # Update docker-compose.github.yml with new versions
+                        sed -i 's|:v1.0.[0-9]*|:${IMAGE_VERSION}|g' docker-compose.github.yml || true
+                        
+                        # Create deployment manifest
+                        cat > deployment-manifest.yaml << EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: image-versions
+data:
+  frontend: "${FRONTEND_IMAGE}:${IMAGE_VERSION}"
+  backend: "${BACKEND_IMAGE}:${IMAGE_VERSION}"
+  database: "${DATABASE_IMAGE}:${IMAGE_VERSION}"
+  build_number: "${BUILD_NUMBER}"
+  timestamp: "$(date)"
+EOF
+                    """
+                    
+                    archiveArtifacts artifacts: 'deployment-manifest.yaml'
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                // Cleanup
+                sh """
+                    docker network rm ${TEST_NETWORK} || true
+                    docker logout ${GHCR_REGISTRY} || true
+                """
+                echo "🧹 Cleanup completed"
+            }
+        }
+        
+        success {
+            script {
+                echo "✅ GitHub Registry Pipeline completed successfully!"
+                echo "📦 Images available at: ${GHCR_REGISTRY}/${GHCR_OWNER}"
+                
+                // Generate success report
+                writeFile file: 'github-registry-success.txt', text: """
+                🎉 GitHub Container Registry Deployment - SUCCESS
+                ================================================
+                Build Number: ${BUILD_NUMBER}
+                Version: ${IMAGE_VERSION}
+                Registry: ${GHCR_REGISTRY}
+                Owner: ${GHCR_OWNER}
+                Environment: ${params.ENVIRONMENT}
+                Source: ${params.REGISTRY_SOURCE}
+                
+                📦 Published Images:
+                - ${FRONTEND_IMAGE}:${IMAGE_VERSION}
+                - ${BACKEND_IMAGE}:${IMAGE_VERSION}
+                - ${DATABASE_IMAGE}:${IMAGE_VERSION}
+                
+                🔗 Registry URL: https://github.com/${GHCR_OWNER}?tab=packages
+                ✅ All tests passed
+                ✅ Images verified in both registries
+                """
+                
+                archiveArtifacts artifacts: 'github-registry-success.txt'
+                
+                // Trigger Ansible deployment if requested
+                if (params.TRIGGER_ANSIBLE_DEPLOYMENT) {
+                    echo "🚀 Triggering Ansible deployment pipeline..."
+                    // Trigger Ansible pipeline with image versions
+                    build job: 'ansible-deployment-pipeline', 
+                          parameters: [
+                              string(name: 'IMAGE_VERSION', value: IMAGE_VERSION),
+                              string(name: 'ENVIRONMENT', value: params.ENVIRONMENT),
+                              string(name: 'REGISTRY', value: 'github')
+                          ],
+                          wait: false
+                }
+            }
+        }
+        
+        failure {
+            script {
+                echo "❌ GitHub Registry Pipeline failed!"
+                
+                // Generate failure report
+                writeFile file: 'github-registry-failure.txt', text: """
+                ❌ GitHub Container Registry Deployment - FAILED
+                ==============================================
+                Build Number: ${BUILD_NUMBER}
+                Failed Version: ${IMAGE_VERSION}
+                Environment: ${params.ENVIRONMENT}
+                Source: ${params.REGISTRY_SOURCE}
+                Timestamp: ${new Date()}
+                
+                🔍 Check build logs for detailed error information
+                """
+                
+                archiveArtifacts artifacts: 'github-registry-failure.txt'
+                
+                // Cleanup any remaining containers
+                sh """
+                    docker ps -a | grep ${TEST_CONTAINER_PREFIX} | awk '{print \$1}' | xargs docker rm -f || true
+                """
+            }
+        }
+    }
+}

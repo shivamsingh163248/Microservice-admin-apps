@@ -1,0 +1,829 @@
+#!/usr/bin/env groovy
+
+pipeline {
+    agent any
+    
+    environment {
+        // Kubernetes configuration
+        KUBECONFIG = credentials('kubeconfig')
+        K8S_NAMESPACE = "${params.ENVIRONMENT}-${APP_NAME}"
+        
+        // Application configuration
+        APP_NAME = 'microservice-admin-app'
+        CHART_VERSION = "1.0.${BUILD_NUMBER}"
+        
+        // Registry configuration
+        GHCR_REGISTRY = 'ghcr.io'
+        GHCR_OWNER = 'shivamsingh163248'
+        DOCKER_HUB_REPO = 'shivamsingh163248'
+        
+        // Helm configuration
+        HELM_RELEASE_NAME = "${APP_NAME}-${params.ENVIRONMENT}"
+    }
+    
+    parameters {
+        string(
+            name: 'IMAGE_VERSION',
+            defaultValue: 'latest',
+            description: 'Docker image version to deploy'
+        )
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'production'],
+            description: 'Target Kubernetes environment'
+        )
+        choice(
+            name: 'REGISTRY_SOURCE',
+            choices: ['github', 'dockerhub'],
+            description: 'Container registry source'
+        )
+        choice(
+            name: 'DEPLOYMENT_STRATEGY',
+            choices: ['rolling', 'blue-green', 'canary'],
+            description: 'Kubernetes deployment strategy'
+        )
+        string(
+            name: 'REPLICAS',
+            defaultValue: '2',
+            description: 'Number of replicas for each service'
+        )
+        booleanParam(
+            name: 'CREATE_NAMESPACE',
+            defaultValue: true,
+            description: 'Create namespace if it doesn\'t exist'
+        )
+        booleanParam(
+            name: 'ENABLE_AUTOSCALING',
+            defaultValue: true,
+            description: 'Enable Horizontal Pod Autoscaling'
+        )
+        booleanParam(
+            name: 'INSTALL_INGRESS',
+            defaultValue: true,
+            description: 'Install Ingress controller for external access'
+        )
+    }
+    
+    stages {
+        stage('🔍 Preparation') {
+            steps {
+                script {
+                    echo "🚀 Starting Kubernetes Deployment Pipeline"
+                    echo "📦 Version: ${params.IMAGE_VERSION}"
+                    echo "🎯 Environment: ${params.ENVIRONMENT}"
+                    echo "📥 Registry: ${params.REGISTRY_SOURCE}"
+                    echo "🔄 Strategy: ${params.DEPLOYMENT_STRATEGY}"
+                    echo "🏷️ Namespace: ${K8S_NAMESPACE}"
+                    
+                    // Set image URLs based on registry
+                    if (params.REGISTRY_SOURCE == 'github') {
+                        env.FRONTEND_IMAGE = "${GHCR_REGISTRY}/${GHCR_OWNER}/nginx_frontend:${params.IMAGE_VERSION}"
+                        env.BACKEND_IMAGE = "${GHCR_REGISTRY}/${GHCR_OWNER}/flask_backend:${params.IMAGE_VERSION}"
+                        env.DATABASE_IMAGE = "${GHCR_REGISTRY}/${GHCR_OWNER}/mysql_db:${params.IMAGE_VERSION}"
+                    } else {
+                        env.FRONTEND_IMAGE = "${DOCKER_HUB_REPO}/nginx_frontend:${params.IMAGE_VERSION}"
+                        env.BACKEND_IMAGE = "${DOCKER_HUB_REPO}/flask_backend:${params.IMAGE_VERSION}"
+                        env.DATABASE_IMAGE = "${DOCKER_HUB_REPO}/mysql_db:${params.IMAGE_VERSION}"
+                    }
+                    
+                    echo "🖼️ Images to deploy:"
+                    echo "   Frontend: ${env.FRONTEND_IMAGE}"
+                    echo "   Backend: ${env.BACKEND_IMAGE}"
+                    echo "   Database: ${env.DATABASE_IMAGE}"
+                }
+            }
+        }
+        
+        stage('🔧 Setup Kubernetes Tools') {
+            steps {
+                script {
+                    // Install kubectl if not present
+                    sh """
+                        if ! command -v kubectl &> /dev/null; then
+                            echo "Installing kubectl..."
+                            curl -LO "https://dl.k8s.io/release/\$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+                            chmod +x kubectl
+                            sudo mv kubectl /usr/local/bin/
+                        fi
+                        
+                        kubectl version --client
+                    """
+                    
+                    // Install Helm if not present
+                    sh """
+                        if ! command -v helm &> /dev/null; then
+                            echo "Installing Helm..."
+                            curl https://get.helm.sh/helm-v3.12.0-linux-amd64.tar.gz | tar xzf -
+                            sudo mv linux-amd64/helm /usr/local/bin/
+                            rm -rf linux-amd64
+                        fi
+                        
+                        helm version
+                    """
+                    
+                    // Setup kubeconfig
+                    sh """
+                        mkdir -p ~/.kube
+                        cp ${KUBECONFIG} ~/.kube/config
+                        chmod 600 ~/.kube/config
+                        
+                        # Test connection
+                        kubectl cluster-info
+                        kubectl get nodes
+                    """
+                }
+            }
+        }
+        
+        stage('📋 Generate Kubernetes Manifests') {
+            steps {
+                script {
+                    // Create namespace manifest
+                    writeFile file: 'k8s/namespace.yaml', text: """
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${K8S_NAMESPACE}
+  labels:
+    app: ${APP_NAME}
+    environment: ${params.ENVIRONMENT}
+"""
+                    
+                    // Create database deployment and service
+                    writeFile file: 'k8s/database.yaml', text: """
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql-database
+  namespace: ${K8S_NAMESPACE}
+  labels:
+    app: mysql-database
+    tier: database
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql-database
+  template:
+    metadata:
+      labels:
+        app: mysql-database
+        tier: database
+    spec:
+      containers:
+      - name: mysql
+        image: ${env.DATABASE_IMAGE}
+        ports:
+        - containerPort: 3306
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          value: "rootpass"
+        - name: MYSQL_DATABASE
+          value: "adminapp"
+        - name: MYSQL_USER
+          value: "adminuser"
+        - name: MYSQL_PASSWORD
+          value: "adminpass"
+        volumeMounts:
+        - name: mysql-storage
+          mountPath: /var/lib/mysql
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - mysqladmin
+            - ping
+            - -h
+            - localhost
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - mysqladmin
+            - ping
+            - -h
+            - localhost
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: mysql-storage
+        persistentVolumeClaim:
+          claimName: mysql-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-service
+  namespace: ${K8S_NAMESPACE}
+  labels:
+    app: mysql-database
+spec:
+  selector:
+    app: mysql-database
+  ports:
+  - port: 3306
+    targetPort: 3306
+  type: ClusterIP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
+  namespace: ${K8S_NAMESPACE}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+"""
+                    
+                    // Create backend deployment and service
+                    writeFile file: 'k8s/backend.yaml', text: """
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flask-backend
+  namespace: ${K8S_NAMESPACE}
+  labels:
+    app: flask-backend
+    tier: backend
+spec:
+  replicas: ${params.REPLICAS}
+  selector:
+    matchLabels:
+      app: flask-backend
+  template:
+    metadata:
+      labels:
+        app: flask-backend
+        tier: backend
+    spec:
+      containers:
+      - name: flask-backend
+        image: ${env.BACKEND_IMAGE}
+        ports:
+        - containerPort: 5000
+        env:
+        - name: DB_HOST
+          value: "mysql-service"
+        - name: DB_USER
+          value: "adminuser"
+        - name: DB_PASS
+          value: "adminpass"
+        - name: DB_NAME
+          value: "adminapp"
+        - name: FLASK_ENV
+          value: "${params.ENVIRONMENT}"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: ${K8S_NAMESPACE}
+  labels:
+    app: flask-backend
+spec:
+  selector:
+    app: flask-backend
+  ports:
+  - port: 5000
+    targetPort: 5000
+  type: ClusterIP
+"""
+                    
+                    // Create frontend deployment and service
+                    writeFile file: 'k8s/frontend.yaml', text: """
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-frontend
+  namespace: ${K8S_NAMESPACE}
+  labels:
+    app: nginx-frontend
+    tier: frontend
+spec:
+  replicas: ${params.REPLICAS}
+  selector:
+    matchLabels:
+      app: nginx-frontend
+  template:
+    metadata:
+      labels:
+        app: nginx-frontend
+        tier: frontend
+    spec:
+      containers:
+      - name: nginx-frontend
+        image: ${env.FRONTEND_IMAGE}
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: ${K8S_NAMESPACE}
+  labels:
+    app: nginx-frontend
+spec:
+  selector:
+    app: nginx-frontend
+  ports:
+  - port: 80
+    targetPort: 80
+  type: ClusterIP
+"""
+                    
+                    // Create ingress for external access
+                    if (params.INSTALL_INGRESS) {
+                        writeFile file: 'k8s/ingress.yaml', text: """
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app-ingress
+  namespace: ${K8S_NAMESPACE}
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: ${APP_NAME}-${params.ENVIRONMENT}.local
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: backend-service
+            port:
+              number: 5000
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: frontend-service
+            port:
+              number: 80
+"""
+                    }
+                    
+                    // Create HPA if enabled
+                    if (params.ENABLE_AUTOSCALING) {
+                        writeFile file: 'k8s/hpa.yaml', text: """
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend-hpa
+  namespace: ${K8S_NAMESPACE}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: flask-backend
+  minReplicas: ${params.REPLICAS}
+  maxReplicas: ${Integer.parseInt(params.REPLICAS) * 3}
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: frontend-hpa
+  namespace: ${K8S_NAMESPACE}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nginx-frontend
+  minReplicas: ${params.REPLICAS}
+  maxReplicas: ${Integer.parseInt(params.REPLICAS) * 2}
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+"""
+                    }
+                    
+                    // Create ConfigMap for application configuration
+                    writeFile file: 'k8s/configmap.yaml', text: """
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: ${K8S_NAMESPACE}
+data:
+  environment: "${params.ENVIRONMENT}"
+  app_name: "${APP_NAME}"
+  image_version: "${params.IMAGE_VERSION}"
+  registry_source: "${params.REGISTRY_SOURCE}"
+  deployment_strategy: "${params.DEPLOYMENT_STRATEGY}"
+"""
+                }
+            }
+        }
+        
+        stage('🏗️ Create/Update Namespace') {
+            when {
+                expression { params.CREATE_NAMESPACE }
+            }
+            steps {
+                script {
+                    sh """
+                        # Create namespace if it doesn't exist
+                        kubectl apply -f k8s/namespace.yaml
+                        
+                        # Verify namespace
+                        kubectl get namespace ${K8S_NAMESPACE}
+                    """
+                }
+            }
+        }
+        
+        stage('🔐 Setup Registry Secrets') {
+            steps {
+                script {
+                    if (params.REGISTRY_SOURCE == 'github') {
+                        withCredentials([string(credentialsId: 'github-token', variable: 'GITHUB_TOKEN')]) {
+                            sh """
+                                # Create or update registry secret for GitHub
+                                kubectl create secret docker-registry ghcr-secret \\
+                                    --docker-server=${GHCR_REGISTRY} \\
+                                    --docker-username=${GHCR_OWNER} \\
+                                    --docker-password=${GITHUB_TOKEN} \\
+                                    --namespace=${K8S_NAMESPACE} \\
+                                    --dry-run=client -o yaml | kubectl apply -f -
+                            """
+                        }
+                    } else {
+                        echo "Using Docker Hub public images, no registry secret needed"
+                    }
+                }
+            }
+        }
+        
+        stage('📋 Apply ConfigMap') {
+            steps {
+                script {
+                    sh """
+                        # Apply ConfigMap
+                        kubectl apply -f k8s/configmap.yaml
+                        
+                        # Verify ConfigMap
+                        kubectl get configmap app-config -n ${K8S_NAMESPACE}
+                    """
+                }
+            }
+        }
+        
+        stage('🗄️ Deploy Database') {
+            steps {
+                script {
+                    echo "🗄️ Deploying database..."
+                    
+                    sh """
+                        # Apply database manifests
+                        kubectl apply -f k8s/database.yaml
+                        
+                        # Wait for database to be ready
+                        kubectl wait --for=condition=available deployment/mysql-database \\
+                            --namespace=${K8S_NAMESPACE} --timeout=300s
+                        
+                        # Check database status
+                        kubectl get pods -l app=mysql-database -n ${K8S_NAMESPACE}
+                    """
+                }
+            }
+        }
+        
+        stage('🔧 Deploy Backend') {
+            steps {
+                script {
+                    echo "🔧 Deploying backend..."
+                    
+                    sh """
+                        # Apply backend manifests
+                        kubectl apply -f k8s/backend.yaml
+                        
+                        # Wait for backend to be ready
+                        kubectl wait --for=condition=available deployment/flask-backend \\
+                            --namespace=${K8S_NAMESPACE} --timeout=300s
+                        
+                        # Check backend status
+                        kubectl get pods -l app=flask-backend -n ${K8S_NAMESPACE}
+                    """
+                }
+            }
+        }
+        
+        stage('🌐 Deploy Frontend') {
+            steps {
+                script {
+                    echo "🌐 Deploying frontend..."
+                    
+                    sh """
+                        # Apply frontend manifests
+                        kubectl apply -f k8s/frontend.yaml
+                        
+                        # Wait for frontend to be ready
+                        kubectl wait --for=condition=available deployment/nginx-frontend \\
+                            --namespace=${K8S_NAMESPACE} --timeout=300s
+                        
+                        # Check frontend status
+                        kubectl get pods -l app=nginx-frontend -n ${K8S_NAMESPACE}
+                    """
+                }
+            }
+        }
+        
+        stage('🌍 Setup Ingress') {
+            when {
+                expression { params.INSTALL_INGRESS }
+            }
+            steps {
+                script {
+                    echo "🌍 Setting up ingress..."
+                    
+                    sh """
+                        # Install ingress controller if not present
+                        if ! kubectl get ingressclass nginx &>/dev/null; then
+                            echo "Installing NGINX Ingress Controller..."
+                            kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
+                            
+                            # Wait for ingress controller to be ready
+                            kubectl wait --namespace ingress-nginx \\
+                                --for=condition=ready pod \\
+                                --selector=app.kubernetes.io/component=controller \\
+                                --timeout=300s
+                        fi
+                        
+                        # Apply ingress manifests
+                        kubectl apply -f k8s/ingress.yaml
+                        
+                        # Check ingress status
+                        kubectl get ingress -n ${K8S_NAMESPACE}
+                    """
+                }
+            }
+        }
+        
+        stage('📈 Setup Autoscaling') {
+            when {
+                expression { params.ENABLE_AUTOSCALING }
+            }
+            steps {
+                script {
+                    echo "📈 Setting up autoscaling..."
+                    
+                    sh """
+                        # Apply HPA manifests
+                        kubectl apply -f k8s/hpa.yaml
+                        
+                        # Check HPA status
+                        kubectl get hpa -n ${K8S_NAMESPACE}
+                    """
+                }
+            }
+        }
+        
+        stage('✅ Health Checks') {
+            steps {
+                script {
+                    echo "✅ Running health checks..."
+                    
+                    sh """
+                        # Wait for all pods to be ready
+                        echo "Waiting for all pods to be ready..."
+                        kubectl wait --for=condition=ready pod --all -n ${K8S_NAMESPACE} --timeout=300s
+                        
+                        # Check pod status
+                        kubectl get pods -n ${K8S_NAMESPACE}
+                        
+                        # Test backend health
+                        echo "Testing backend health..."
+                        kubectl run test-backend --rm -i --restart=Never --image=curlimages/curl \\
+                            --namespace=${K8S_NAMESPACE} \\
+                            -- curl -f http://backend-service:5000/health
+                        
+                        # Test frontend accessibility
+                        echo "Testing frontend accessibility..."
+                        kubectl run test-frontend --rm -i --restart=Never --image=curlimages/curl \\
+                            --namespace=${K8S_NAMESPACE} \\
+                            -- curl -f http://frontend-service:80
+                    """
+                }
+            }
+        }
+        
+        stage('📊 Get Service Information') {
+            steps {
+                script {
+                    echo "📊 Getting service information..."
+                    
+                    // Get service URLs
+                    def services = sh(
+                        script: "kubectl get services -n ${K8S_NAMESPACE} -o wide",
+                        returnStdout: true
+                    ).trim()
+                    
+                    def ingress = ""
+                    if (params.INSTALL_INGRESS) {
+                        ingress = sh(
+                            script: "kubectl get ingress -n ${K8S_NAMESPACE} -o wide",
+                            returnStdout: true
+                        ).trim()
+                    }
+                    
+                    // Create service report
+                    writeFile file: 'k8s-service-info.txt', text: """
+🎯 Kubernetes Deployment Information
+===================================
+Namespace: ${K8S_NAMESPACE}
+Environment: ${params.ENVIRONMENT}
+Image Version: ${params.IMAGE_VERSION}
+Registry: ${params.REGISTRY_SOURCE}
+Replicas: ${params.REPLICAS}
+
+📋 Services:
+${services}
+
+🌍 Ingress:
+${ingress}
+
+🖼️ Deployed Images:
+- Frontend: ${env.FRONTEND_IMAGE}
+- Backend: ${env.BACKEND_IMAGE}
+- Database: ${env.DATABASE_IMAGE}
+
+🔗 Access Information:
+- Namespace: ${K8S_NAMESPACE}
+- Frontend Service: frontend-service:80
+- Backend Service: backend-service:5000
+- Database Service: mysql-service:3306
+
+📈 Autoscaling: ${params.ENABLE_AUTOSCALING ? 'Enabled' : 'Disabled'}
+🌍 Ingress: ${params.INSTALL_INGRESS ? 'Enabled' : 'Disabled'}
+
+✅ Deployment Status: SUCCESS
+"""
+                    
+                    archiveArtifacts artifacts: 'k8s-service-info.txt'
+                    
+                    echo "📊 Service Information:"
+                    echo services
+                    
+                    if (params.INSTALL_INGRESS) {
+                        echo "🌍 Ingress Information:"
+                        echo ingress
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                // Archive all Kubernetes manifests
+                archiveArtifacts artifacts: 'k8s/*.yaml'
+                echo "🧹 Cleanup completed"
+            }
+        }
+        
+        success {
+            script {
+                echo "✅ Kubernetes Deployment Pipeline completed successfully!"
+                echo "🎉 Application deployed to namespace: ${K8S_NAMESPACE}"
+                
+                // Get final status
+                sh """
+                    echo "📊 Final Deployment Status:"
+                    kubectl get all -n ${K8S_NAMESPACE}
+                """
+                
+                // Generate success report
+                writeFile file: 'k8s-deployment-success.txt', text: """
+🎉 Kubernetes Deployment - SUCCESS
+=================================
+Namespace: ${K8S_NAMESPACE}
+Environment: ${params.ENVIRONMENT}
+Version: ${params.IMAGE_VERSION}
+Registry: ${params.REGISTRY_SOURCE}
+Strategy: ${params.DEPLOYMENT_STRATEGY}
+Timestamp: ${new Date()}
+
+🚀 Successfully Deployed:
+- Database: MySQL with persistent storage
+- Backend: Flask API with ${params.REPLICAS} replicas
+- Frontend: Nginx with ${params.REPLICAS} replicas
+
+✅ Features Enabled:
+- Health Checks: ✅
+- Autoscaling: ${params.ENABLE_AUTOSCALING ? '✅' : '❌'}
+- Ingress: ${params.INSTALL_INGRESS ? '✅' : '❌'}
+- Persistent Storage: ✅
+
+🔗 Access your application:
+kubectl port-forward service/frontend-service 8080:80 -n ${K8S_NAMESPACE}
+Then visit: http://localhost:8080
+"""
+                
+                archiveArtifacts artifacts: 'k8s-deployment-success.txt'
+            }
+        }
+        
+        failure {
+            script {
+                echo "❌ Kubernetes Deployment Pipeline failed!"
+                
+                // Get debug information
+                sh """
+                    echo "🔍 Debug Information:"
+                    kubectl get all -n ${K8S_NAMESPACE} || true
+                    kubectl describe pods -n ${K8S_NAMESPACE} || true
+                    kubectl logs -l app=flask-backend -n ${K8S_NAMESPACE} --tail=50 || true
+                """
+                
+                // Create failure report
+                writeFile file: 'k8s-deployment-failure.txt', text: """
+❌ Kubernetes Deployment Failed
+==============================
+Namespace: ${K8S_NAMESPACE}
+Environment: ${params.ENVIRONMENT}
+Version: ${params.IMAGE_VERSION}
+Failed at: ${new Date()}
+
+🔍 Check Jenkins logs and Kubernetes events for details
+📧 Manual intervention may be required
+
+🛠️ Debug Commands:
+kubectl get all -n ${K8S_NAMESPACE}
+kubectl describe pods -n ${K8S_NAMESPACE}
+kubectl logs -l app=flask-backend -n ${K8S_NAMESPACE}
+"""
+                
+                archiveArtifacts artifacts: 'k8s-deployment-failure.txt'
+            }
+        }
+    }
+}

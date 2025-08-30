@@ -1,0 +1,66 @@
+{
+  "files": [
+    {
+      "pattern": "generic-local/microservice-admin-app/*",
+      "target": "downloads/",
+      "props": "",
+      "recursive": true,
+      "flat": false,
+      "build": false,
+      "sortBy": ["created"],
+      "sortOrder": "desc",
+      "limit": 10
+    },
+    {
+      "pattern": "docker-local/nginx_frontend:latest",
+      "target": "downloads/docker/",
+      "props": "",
+      "recursive": false,
+      "flat": false,
+      "build": false
+    },
+    {
+      "pattern": "docker-local/flask_backend:latest",
+      "target": "downloads/docker/",
+      "props": "",
+      "recursive": false,
+      "flat": false,
+      "build": false
+    },
+    {
+      "pattern": "docker-local/mysql_db:latest",
+      "target": "downloads/docker/",
+      "props": "",
+      "recursive": false,
+      "flat": false,
+      "build": false
+    },
+    {
+      "aql": {
+        "items.find": {
+          "repo": "generic-local",
+          "path": {"$match": "microservice-admin-app/*"},
+          "name": {"$match": "*.tar.gz"},
+          "type": "file"
+        }
+      },
+      "target": "downloads/source/",
+      "sortBy": ["created"],
+      "sortOrder": "desc",
+      "limit": 5
+    },
+    {
+      "aql": {
+        "items.find": {
+          "repo": "generic-local",
+          "path": {"$match": "microservice-admin-app/*/reports"},
+          "type": "file"
+        }
+      },
+      "target": "downloads/reports/",
+      "sortBy": ["created"],
+      "sortOrder": "desc",
+      "limit": 20
+    }
+  ]
+}

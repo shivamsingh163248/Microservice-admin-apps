@@ -1,0 +1,100 @@
+{
+  "files": [
+    {
+      "pattern": "artifacts/docker/nginx_frontend:*",
+      "target": "docker-local/nginx_frontend/",
+      "props": "component=frontend;type=docker;tier=web",
+      "recursive": true,
+      "regexp": false,
+      "build": true
+    },
+    {
+      "pattern": "artifacts/docker/flask_backend:*", 
+      "target": "docker-local/flask_backend/",
+      "props": "component=backend;type=docker;tier=api",
+      "recursive": true,
+      "regexp": false,
+      "build": true
+    },
+    {
+      "pattern": "artifacts/docker/mysql_db:*",
+      "target": "docker-local/mysql_db/",
+      "props": "component=database;type=docker;tier=data",
+      "recursive": true,
+      "regexp": false,
+      "build": true
+    },
+    {
+      "pattern": "artifacts/generic/frontend-*.tar.gz",
+      "target": "generic-local/microservice-admin-app/{1}/",
+      "props": "component=frontend;type=source;format=tar.gz",
+      "recursive": false,
+      "regexp": true,
+      "build": true
+    },
+    {
+      "pattern": "artifacts/generic/backend-*.tar.gz",
+      "target": "generic-local/microservice-admin-app/{1}/",
+      "props": "component=backend;type=source;format=tar.gz",
+      "recursive": false,
+      "regexp": true,
+      "build": true
+    },
+    {
+      "pattern": "artifacts/generic/database-*.tar.gz",
+      "target": "generic-local/microservice-admin-app/{1}/",
+      "props": "component=database;type=source;format=tar.gz",
+      "recursive": false,
+      "regexp": true,
+      "build": true
+    },
+    {
+      "pattern": "artifacts/generic/*.json",
+      "target": "generic-local/microservice-admin-app/${BUILD_NUMBER}/metadata/",
+      "props": "type=metadata;format=json",
+      "recursive": false,
+      "regexp": false,
+      "build": true
+    },
+    {
+      "pattern": "artifacts/reports/*.xml",
+      "target": "generic-local/microservice-admin-app/${BUILD_NUMBER}/reports/",
+      "props": "type=test-report;format=xml",
+      "recursive": false,
+      "regexp": false,
+      "build": true
+    },
+    {
+      "pattern": "artifacts/reports/*.json",
+      "target": "generic-local/microservice-admin-app/${BUILD_NUMBER}/reports/",
+      "props": "type=security-report;format=json",
+      "recursive": false,
+      "regexp": false,
+      "build": true
+    },
+    {
+      "pattern": "artifacts/reports/*.html",
+      "target": "generic-local/microservice-admin-app/${BUILD_NUMBER}/reports/",
+      "props": "type=coverage-report;format=html",
+      "recursive": false,
+      "regexp": false,
+      "build": true
+    },
+    {
+      "pattern": "requirements.txt",
+      "target": "pypi-local/microservice-admin-app/${BUILD_NUMBER}/",
+      "props": "component=backend;type=dependencies;format=txt",
+      "recursive": false,
+      "regexp": false,
+      "build": true
+    },
+    {
+      "pattern": "package.json",
+      "target": "npm-local/microservice-admin-app/${BUILD_NUMBER}/",
+      "props": "component=frontend;type=dependencies;format=json",
+      "recursive": false,
+      "regexp": false,
+      "build": true
+    }
+  ]
+}

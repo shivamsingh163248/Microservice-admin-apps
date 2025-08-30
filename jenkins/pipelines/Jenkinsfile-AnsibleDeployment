@@ -1,0 +1,547 @@
+ #!/usr/bin/env groovy
+
+pipeline {
+    agent any
+    
+    environment {
+        // Ansible configuration
+        ANSIBLE_HOST_KEY_CHECKING = 'False'
+        ANSIBLE_FORCE_COLOR = 'True'
+        
+        // Application configuration
+        APP_NAME = 'microservice-admin-app'
+        
+        // Registry configurations
+        GHCR_REGISTRY = 'ghcr.io'
+        GHCR_OWNER = 'shivamsingh163248'
+        DOCKER_HUB_REPO = 'shivamsingh163248'
+        
+        // SSH and server configuration
+        SSH_CREDENTIALS = credentials('ec2-ssh-key')
+        GITHUB_TOKEN = credentials('github-token')
+    }
+    
+    parameters {
+        string(
+            name: 'IMAGE_VERSION',
+            defaultValue: 'latest',
+            description: 'Image version to deploy (e.g., v1.0.15)'
+        )
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'production'],
+            description: 'Target deployment environment'
+        )
+        choice(
+            name: 'REGISTRY_SOURCE',
+            choices: ['github', 'dockerhub'],
+            description: 'Container registry source'
+        )
+        choice(
+            name: 'DEPLOYMENT_STRATEGY',
+            choices: ['rolling', 'blue-green', 'recreate'],
+            description: 'Deployment strategy'
+        )
+        booleanParam(
+            name: 'RUN_HEALTH_CHECKS',
+            defaultValue: true,
+            description: 'Run health checks after deployment'
+        )
+        booleanParam(
+            name: 'BACKUP_BEFORE_DEPLOY',
+            defaultValue: true,
+            description: 'Backup current deployment before updating'
+        )
+    }
+    
+    stages {
+        stage('🔍 Pre-deployment Validation') {
+            steps {
+                script {
+                    echo "🚀 Starting Ansible Deployment Pipeline"
+                    echo "📦 Version: ${params.IMAGE_VERSION}"
+                    echo "🎯 Environment: ${params.ENVIRONMENT}"
+                    echo "📥 Registry: ${params.REGISTRY_SOURCE}"
+                    echo "🔄 Strategy: ${params.DEPLOYMENT_STRATEGY}"
+                    
+                    // Validate parameters
+                    if (!params.IMAGE_VERSION || params.IMAGE_VERSION == '') {
+                        error("❌ IMAGE_VERSION parameter is required")
+                    }
+                    
+                    // Set registry-specific variables
+                    if (params.REGISTRY_SOURCE == 'github') {
+                        env.FRONTEND_IMAGE = "${GHCR_REGISTRY}/${GHCR_OWNER}/nginx_frontend:${params.IMAGE_VERSION}"
+                        env.BACKEND_IMAGE = "${GHCR_REGISTRY}/${GHCR_OWNER}/flask_backend:${params.IMAGE_VERSION}"
+                        env.DATABASE_IMAGE = "${GHCR_REGISTRY}/${GHCR_OWNER}/mysql_db:${params.IMAGE_VERSION}"
+                        env.REGISTRY_URL = GHCR_REGISTRY
+                    } else {
+                        env.FRONTEND_IMAGE = "${DOCKER_HUB_REPO}/nginx_frontend:${params.IMAGE_VERSION}"
+                        env.BACKEND_IMAGE = "${DOCKER_HUB_REPO}/flask_backend:${params.IMAGE_VERSION}"
+                        env.DATABASE_IMAGE = "${DOCKER_HUB_REPO}/mysql_db:${params.IMAGE_VERSION}"
+                        env.REGISTRY_URL = "docker.io"
+                    }
+                    
+                    echo "🖼️ Images to deploy:"
+                    echo "   Frontend: ${env.FRONTEND_IMAGE}"
+                    echo "   Backend: ${env.BACKEND_IMAGE}"
+                    echo "   Database: ${env.DATABASE_IMAGE}"
+                }
+            }
+        }
+        
+        stage('🔧 Setup Ansible Environment') {
+            steps {
+                script {
+                    // Install/update Ansible if needed
+                    sh """
+                        # Check Ansible version
+                        ansible --version || {
+                            echo "Installing Ansible..."
+                            pip3 install ansible
+                        }
+                        
+                        # Verify Ansible collections
+                        ansible-galaxy collection install community.docker || true
+                        ansible-galaxy collection install ansible.posix || true
+                    """
+                    
+                    // Setup SSH key
+                    sh """
+                        mkdir -p ~/.ssh
+                        chmod 700 ~/.ssh
+                        
+                        # Copy SSH key (assuming it's stored as Jenkins credentials)
+                        cp ${SSH_CREDENTIALS} ~/.ssh/deployment_key
+                        chmod 600 ~/.ssh/deployment_key
+                        
+                        # Add to SSH agent
+                        eval \$(ssh-agent -s)
+                        ssh-add ~/.ssh/deployment_key
+                    """
+                }
+            }
+        }
+        
+        stage('📋 Generate Deployment Configuration') {
+            steps {
+                script {
+                    // Create environment-specific inventory
+                    def inventoryContent = """
+[webservers]
+${params.ENVIRONMENT}-server ansible_host=54.234.122.255 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/deployment_key
+
+[webservers:vars]
+environment=${params.ENVIRONMENT}
+app_name=${APP_NAME}
+image_version=${params.IMAGE_VERSION}
+registry_source=${params.REGISTRY_SOURCE}
+deployment_strategy=${params.DEPLOYMENT_STRATEGY}
+"""
+                    
+                    writeFile file: 'inventory-dynamic.ini', text: inventoryContent
+                    
+                    // Create deployment playbook
+                    def playbookContent = '''
+---
+- name: Deploy Microservices with Multiple Registry Support
+  hosts: webservers
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    app_dir: "/opt/{{ app_name }}"
+    docker_compose_file: "docker-compose.{{ environment }}.yml"
+    backup_dir: "/opt/backups/{{ app_name }}"
+    
+  pre_tasks:
+  - name: Display deployment information
+    debug:
+      msg:
+      - "🚀 Deploying {{ app_name }}"
+      - "📦 Version: {{ image_version }}"
+      - "🎯 Environment: {{ environment }}"
+      - "📥 Registry: {{ registry_source }}"
+      - "🔄 Strategy: {{ deployment_strategy }}"
+  
+  tasks:
+  - name: Create backup directory
+    file:
+      path: "{{ backup_dir }}"
+      state: directory
+      mode: '0755'
+    when: backup_before_deploy | default(true)
+  
+  - name: Backup current deployment
+    shell: |
+      if [ -d "{{ app_dir }}" ]; then
+        tar -czf "{{ backup_dir }}/backup-$(date +%Y%m%d-%H%M%S).tar.gz" -C "{{ app_dir }}" .
+        echo "Backup created successfully"
+      else
+        echo "No existing deployment to backup"
+      fi
+    when: backup_before_deploy | default(true)
+  
+  - name: Ensure application directory exists
+    file:
+      path: "{{ app_dir }}"
+      state: directory
+      owner: "{{ ansible_user }}"
+      group: "{{ ansible_user }}"
+      mode: '0755'
+  
+  - name: Stop existing services (if any)
+    shell: |
+      cd "{{ app_dir }}"
+      if [ -f "{{ docker_compose_file }}" ]; then
+        docker-compose -f "{{ docker_compose_file }}" down || true
+      fi
+    ignore_errors: yes
+  
+  - name: Login to appropriate registry
+    shell: |
+      {% if registry_source == 'github' %}
+      echo "{{ github_token }}" | docker login ghcr.io -u "{{ ghcr_owner }}" --password-stdin
+      {% else %}
+      echo "Assuming Docker Hub public images, no login required"
+      {% endif %}
+    environment:
+      github_token: "{{ lookup('env', 'GITHUB_TOKEN') }}"
+    when: registry_source == 'github'
+  
+  - name: Create deployment docker-compose file
+    template:
+      src: docker-compose.deployment.yml.j2
+      dest: "{{ app_dir }}/{{ docker_compose_file }}"
+      mode: '0644'
+  
+  - name: Pull latest images
+    shell: |
+      cd "{{ app_dir }}"
+      docker-compose -f "{{ docker_compose_file }}" pull
+  
+  - name: Deploy services
+    shell: |
+      cd "{{ app_dir }}"
+      {% if deployment_strategy == 'blue-green' %}
+      # Blue-green deployment logic
+      docker-compose -f "{{ docker_compose_file }}" up -d --force-recreate
+      {% elif deployment_strategy == 'rolling' %}
+      # Rolling deployment - update one service at a time
+      for service in database backend frontend; do
+        docker-compose -f "{{ docker_compose_file }}" up -d --no-deps $service
+        sleep 10
+      done
+      {% else %}
+      # Recreate deployment
+      docker-compose -f "{{ docker_compose_file }}" up -d --force-recreate
+      {% endif %}
+  
+  - name: Wait for services to be ready
+    wait_for:
+      port: "{{ item }}"
+      host: localhost
+      delay: 10
+      timeout: 300
+    loop:
+      - 3306  # Database
+      - 5001  # Backend
+      - 8081  # Frontend
+  
+  - name: Health check - Backend
+    uri:
+      url: "http://localhost:5001/health"
+      method: GET
+      status_code: 200
+    retries: 5
+    delay: 10
+    when: run_health_checks | default(true)
+  
+  - name: Health check - Frontend
+    uri:
+      url: "http://localhost:8081"
+      method: GET
+      status_code: 200
+    retries: 5
+    delay: 10
+    when: run_health_checks | default(true)
+  
+  - name: Get service status
+    shell: |
+      cd "{{ app_dir }}"
+      docker-compose -f "{{ docker_compose_file }}" ps
+    register: service_status
+  
+  - name: Display deployment results
+    debug:
+      msg:
+      - "✅ Deployment completed successfully!"
+      - "🔗 Frontend: http://{{ ansible_default_ipv4.address }}:8081"
+      - "🔗 Backend: http://{{ ansible_default_ipv4.address }}:5001"
+      - "🔗 Health: http://{{ ansible_default_ipv4.address }}:5001/health"
+      - "📊 Services:"
+      - "{{ service_status.stdout_lines }}"
+  
+  post_tasks:
+  - name: Clean up old images
+    shell: |
+      docker image prune -f
+      docker container prune -f
+    ignore_errors: yes
+'''
+                    
+                    writeFile file: 'deploy-playbook.yml', text: playbookContent
+                    
+                    // Create docker-compose template
+                    def composeTemplate = '''version: '3.8'
+
+services:
+  database:
+    image: {{ database_image }}
+    container_name: mysql_db_{{ environment }}
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: adminapp
+      MYSQL_USER: adminuser
+      MYSQL_PASSWORD: adminpass
+    volumes:
+      - mysql_data_{{ environment }}:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+      interval: 30s
+    networks:
+      - app-network
+
+  backend:
+    image: {{ backend_image }}
+    container_name: flask_backend_{{ environment }}
+    restart: always
+    environment:
+      DB_HOST: database
+      DB_USER: adminuser
+      DB_PASS: adminpass
+      DB_NAME: adminapp
+      FLASK_ENV: {{ environment }}
+    ports:
+      - "5001:5000"
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      timeout: 10s
+      retries: 5
+      interval: 30s
+    networks:
+      - app-network
+
+  frontend:
+    image: {{ frontend_image }}
+    container_name: nginx_frontend_{{ environment }}
+    restart: always
+    ports:
+      - "8081:80"
+    depends_on:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      timeout: 10s
+      retries: 5
+      interval: 30s
+    networks:
+      - app-network
+
+volumes:
+  mysql_data_{{ environment }}:
+    driver: local
+
+networks:
+  app-network:
+    driver: bridge
+'''
+                    
+                    writeFile file: 'docker-compose.deployment.yml.j2', text: composeTemplate
+                }
+            }
+        }
+        
+        stage('🔍 Pre-deployment Checks') {
+            steps {
+                script {
+                    echo "🔍 Running pre-deployment checks..."
+                    
+                    sh """
+                        # Test SSH connectivity
+                        ansible webservers -i inventory-dynamic.ini -m ping
+                        
+                        # Check disk space on target server
+                        ansible webservers -i inventory-dynamic.ini -m shell -a "df -h /"
+                        
+                        # Check Docker availability
+                        ansible webservers -i inventory-dynamic.ini -m shell -a "docker --version"
+                        
+                        # Check if ports are available or in use by our app
+                        ansible webservers -i inventory-dynamic.ini -m shell -a "netstat -tlnp | grep -E ':8081|:5001|:3306' || echo 'Ports available'"
+                    """
+                }
+            }
+        }
+        
+        stage('🚀 Execute Ansible Deployment') {
+            steps {
+                script {
+                    echo "🚀 Executing Ansible deployment..."
+                    
+                    sh """
+                        # Run Ansible playbook with proper variables
+                        ansible-playbook -i inventory-dynamic.ini deploy-playbook.yml \\
+                            -e "frontend_image=${env.FRONTEND_IMAGE}" \\
+                            -e "backend_image=${env.BACKEND_IMAGE}" \\
+                            -e "database_image=${env.DATABASE_IMAGE}" \\
+                            -e "backup_before_deploy=${params.BACKUP_BEFORE_DEPLOY}" \\
+                            -e "run_health_checks=${params.RUN_HEALTH_CHECKS}" \\
+                            -e "ghcr_owner=${GHCR_OWNER}" \\
+                            -v
+                    """
+                }
+            }
+        }
+        
+        stage('✅ Post-deployment Validation') {
+            when {
+                expression { params.RUN_HEALTH_CHECKS }
+            }
+            steps {
+                script {
+                    echo "✅ Running post-deployment validation..."
+                    
+                    sh """
+                        # Wait a bit for services to fully start
+                        sleep 30
+                        
+                        # Test external connectivity
+                        echo "Testing frontend accessibility..."
+                        curl -f http://54.234.122.255:8081 || exit 1
+                        
+                        echo "Testing backend API..."
+                        curl -f http://54.234.122.255:5001/health || exit 1
+                        
+                        # Test full application flow
+                        echo "Testing application integration..."
+                        response=\$(curl -s http://54.234.122.255:5001/health)
+                        if echo "\$response" | grep -q "healthy"; then
+                            echo "✅ Application is healthy and responsive"
+                        else
+                            echo "❌ Application health check failed"
+                            exit 1
+                        fi
+                    """
+                }
+            }
+        }
+        
+        stage('📊 Generate Deployment Report') {
+            steps {
+                script {
+                    // Create comprehensive deployment report
+                    writeFile file: 'deployment-report.txt', text: """
+🎯 Ansible Deployment Report
+===========================
+Deployment ID: ${BUILD_NUMBER}
+Timestamp: ${new Date()}
+Version: ${params.IMAGE_VERSION}
+Environment: ${params.ENVIRONMENT}
+Registry: ${params.REGISTRY_SOURCE}
+Strategy: ${params.DEPLOYMENT_STRATEGY}
+
+🖼️ Deployed Images:
+- Frontend: ${env.FRONTEND_IMAGE}
+- Backend: ${env.BACKEND_IMAGE}
+- Database: ${env.DATABASE_IMAGE}
+
+🌐 Application URLs:
+- Frontend: http://54.234.122.255:8081
+- Backend API: http://54.234.122.255:5001
+- Health Check: http://54.234.122.255:5001/health
+
+📋 Configuration:
+- Backup Created: ${params.BACKUP_BEFORE_DEPLOY}
+- Health Checks: ${params.RUN_HEALTH_CHECKS}
+- Deployment Strategy: ${params.DEPLOYMENT_STRATEGY}
+
+✅ Status: SUCCESS
+"""
+                    
+                    archiveArtifacts artifacts: 'deployment-report.txt'
+                    
+                    // Get actual service status from server
+                    sh """
+                        echo "📊 Current service status:" >> deployment-status.txt
+                        ansible webservers -i inventory-dynamic.ini -m shell -a "cd /opt/${APP_NAME} && docker-compose ps" >> deployment-status.txt || true
+                    """
+                    
+                    archiveArtifacts artifacts: 'deployment-status.txt'
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                // Cleanup temporary files
+                sh """
+                    rm -f ~/.ssh/deployment_key || true
+                    rm -f inventory-dynamic.ini || true
+                    rm -f deploy-playbook.yml || true
+                    rm -f docker-compose.deployment.yml.j2 || true
+                """
+                echo "🧹 Cleanup completed"
+            }
+        }
+        
+        success {
+            script {
+                echo "✅ Ansible Deployment Pipeline completed successfully!"
+                echo "🎉 Application deployed with version ${params.IMAGE_VERSION}"
+                echo "🌐 Application accessible at http://54.234.122.255:8081"
+                
+                // Send notification (if configured)
+                // emailext subject: "✅ Deployment Success - ${APP_NAME} ${params.IMAGE_VERSION}",
+                //          body: "Deployment completed successfully for environment: ${params.ENVIRONMENT}"
+            }
+        }
+        
+        failure {
+            script {
+                echo "❌ Ansible Deployment Pipeline failed!"
+                echo "🔍 Check logs for detailed error information"
+                
+                // Create failure report
+                writeFile file: 'deployment-failure.txt', text: """
+❌ Ansible Deployment Failed
+==========================
+Build: ${BUILD_NUMBER}
+Version: ${params.IMAGE_VERSION}
+Environment: ${params.ENVIRONMENT}
+Registry: ${params.REGISTRY_SOURCE}
+Failed at: ${new Date()}
+
+🔍 Check build logs for detailed error information
+📧 Manual intervention may be required
+"""
+                
+                archiveArtifacts artifacts: 'deployment-failure.txt'
+                
+                // Send failure notification
+                // emailext subject: "❌ Deployment Failed - ${APP_NAME} ${params.IMAGE_VERSION}",
+                //          body: "Deployment failed for environment: ${params.ENVIRONMENT}. Check Jenkins logs."
+            }
+        }
+    }
+}

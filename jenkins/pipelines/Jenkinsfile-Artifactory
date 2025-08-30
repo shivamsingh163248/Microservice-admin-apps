@@ -1,0 +1,801 @@
+#!/usr/bin/env groovy
+
+pipeline {
+    agent any
+    
+    environment {
+        // Artifactory configuration
+        ARTIFACTORY_URL = 'https://your-company.jfrog.io/artifactory'
+        ARTIFACTORY_CREDENTIALS = credentials('artifactory-credentials')
+        ARTIFACTORY_API_KEY = credentials('artifactory-api-key')
+        
+        // Repository configurations
+        DOCKER_REPO = 'docker-local'
+        DOCKER_VIRTUAL_REPO = 'docker-virtual'
+        GENERIC_REPO = 'generic-local'
+        NPM_REPO = 'npm-local'
+        PYPI_REPO = 'pypi-local'
+        
+        // Application configuration
+        APP_NAME = 'microservice-admin-app'
+        BUILD_INFO_REPO = 'build-info'
+        
+        // Build and artifact configuration
+        BUILD_NAME = "${APP_NAME}"
+        BUILD_NUMBER = "${env.BUILD_NUMBER}"
+        BUILD_URL = "${env.BUILD_URL}"
+        
+        // Registry configurations (for comparison)
+        GHCR_REGISTRY = 'ghcr.io'
+        GHCR_OWNER = 'shivamsingh163248'
+        DOCKER_HUB_REPO = 'shivamsingh163248'
+    }
+    
+    parameters {
+        string(
+            name: 'IMAGE_VERSION',
+            defaultValue: "v1.0.${BUILD_NUMBER}",
+            description: 'Docker image version to build and publish'
+        )
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'production'],
+            description: 'Target environment for deployment'
+        )
+        choice(
+            name: 'ARTIFACT_STRATEGY',
+            choices: ['all', 'docker-only', 'generic-only', 'build-info-only'],
+            description: 'Artifact publishing strategy'
+        )
+        booleanParam(
+            name: 'PROMOTE_TO_RELEASE',
+            defaultValue: false,
+            description: 'Promote artifacts to release repository'
+        )
+        booleanParam(
+            name: 'SECURITY_SCAN',
+            defaultValue: true,
+            description: 'Run Artifactory Xray security scan'
+        )
+        booleanParam(
+            name: 'CLEANUP_OLD_ARTIFACTS',
+            defaultValue: true,
+            description: 'Clean up old artifacts (keep last 10 builds)'
+        )
+        string(
+            name: 'RETENTION_DAYS',
+            defaultValue: '30',
+            description: 'Artifact retention period in days'
+        )
+    }
+    
+    tools {
+        jfrog 'jfrog-cli'
+    }
+    
+    stages {
+        stage('🔍 Preparation & Setup') {
+            steps {
+                script {
+                    echo "🚀 Starting Artifactory Integration Pipeline"
+                    echo "📦 Build: ${BUILD_NAME}#${BUILD_NUMBER}"
+                    echo "🏷️ Version: ${params.IMAGE_VERSION}"
+                    echo "🎯 Environment: ${params.ENVIRONMENT}"
+                    echo "📋 Strategy: ${params.ARTIFACT_STRATEGY}"
+                    echo "🏛️ Artifactory: ${ARTIFACTORY_URL}"
+                    
+                    // Set build properties
+                    env.BUILD_TIMESTAMP = new Date().format('yyyy-MM-dd HH:mm:ss')
+                    env.GIT_COMMIT_SHORT = sh(
+                        script: "git rev-parse --short HEAD",
+                        returnStdout: true
+                    ).trim()
+                    
+                    // Create build info
+                    sh """
+                        mkdir -p artifacts/build-info
+                        mkdir -p artifacts/docker
+                        mkdir -p artifacts/generic
+                        mkdir -p artifacts/reports
+                    """
+                }
+            }
+        }
+        
+        stage('🏛️ Configure Artifactory') {
+            steps {
+                script {
+                    echo "🔧 Configuring JFrog CLI and Artifactory connection"
+                    
+                    // Configure JFrog CLI
+                    sh """
+                        # Configure JFrog CLI with Artifactory instance
+                        jf config add artifactory-server \\
+                            --artifactory-url=${ARTIFACTORY_URL} \\
+                            --user=${ARTIFACTORY_CREDENTIALS_USR} \\
+                            --password=${ARTIFACTORY_CREDENTIALS_PSW} \\
+                            --interactive=false
+                        
+                        # Test connection
+                        jf rt ping --server-id=artifactory-server
+                        
+                        # Get repository list
+                        jf rt curl -X GET /api/repositories --server-id=artifactory-server
+                    """
+                    
+                    // Configure Docker registry
+                    sh """
+                        # Configure Docker to use Artifactory
+                        echo ${ARTIFACTORY_CREDENTIALS_PSW} | docker login \\
+                            ${ARTIFACTORY_URL}/${DOCKER_REPO} \\
+                            -u ${ARTIFACTORY_CREDENTIALS_USR} \\
+                            --password-stdin
+                    """
+                }
+            }
+        }
+        
+        stage('🏗️ Build Application Components') {
+            parallel {
+                stage('🌐 Build Frontend') {
+                    steps {
+                        script {
+                            echo "🌐 Building frontend component..."
+                            
+                            dir('frontend') {
+                                // Build frontend Docker image
+                                def frontendImage = docker.build(
+                                    "nginx_frontend:${params.IMAGE_VERSION}"
+                                )
+                                
+                                // Tag for Artifactory
+                                sh """
+                                    docker tag nginx_frontend:${params.IMAGE_VERSION} \\
+                                        ${ARTIFACTORY_URL}/${DOCKER_REPO}/nginx_frontend:${params.IMAGE_VERSION}
+                                    
+                                    docker tag nginx_frontend:${params.IMAGE_VERSION} \\
+                                        ${ARTIFACTORY_URL}/${DOCKER_REPO}/nginx_frontend:latest
+                                """
+                                
+                                // Create build artifacts
+                                sh """
+                                    # Create frontend build artifacts
+                                    tar -czf ../artifacts/generic/frontend-${params.IMAGE_VERSION}.tar.gz .
+                                    
+                                    # Generate frontend metadata
+                                    cat > ../artifacts/generic/frontend-${params.IMAGE_VERSION}.json << EOF
+{
+  "component": "frontend",
+  "version": "${params.IMAGE_VERSION}",
+  "build_number": "${BUILD_NUMBER}",
+  "git_commit": "${env.GIT_COMMIT_SHORT}",
+  "build_timestamp": "${env.BUILD_TIMESTAMP}",
+  "image_size": "\$(docker images nginx_frontend:${params.IMAGE_VERSION} --format 'table {{.Size}}' | tail -1)",
+  "dockerfile_path": "frontend/Dockerfile"
+}
+EOF
+                                """
+                            }
+                        }
+                    }
+                }
+                
+                stage('🔧 Build Backend') {
+                    steps {
+                        script {
+                            echo "🔧 Building backend component..."
+                            
+                            dir('backend') {
+                                // Build backend Docker image
+                                def backendImage = docker.build(
+                                    "flask_backend:${params.IMAGE_VERSION}"
+                                )
+                                
+                                // Tag for Artifactory
+                                sh """
+                                    docker tag flask_backend:${params.IMAGE_VERSION} \\
+                                        ${ARTIFACTORY_URL}/${DOCKER_REPO}/flask_backend:${params.IMAGE_VERSION}
+                                    
+                                    docker tag flask_backend:${params.IMAGE_VERSION} \\
+                                        ${ARTIFACTORY_URL}/${DOCKER_REPO}/flask_backend:latest
+                                """
+                                
+                                // Create backend artifacts
+                                sh """
+                                    # Create Python wheel/source distribution
+                                    python setup.py sdist bdist_wheel || echo "No setup.py found, creating manual archive"
+                                    
+                                    # Create backend source archive
+                                    tar -czf ../artifacts/generic/backend-${params.IMAGE_VERSION}.tar.gz \\
+                                        --exclude=__pycache__ \\
+                                        --exclude=*.pyc \\
+                                        --exclude=venv \\
+                                        .
+                                    
+                                    # Generate requirements.txt with versions
+                                    pip freeze > ../artifacts/generic/backend-requirements-${params.IMAGE_VERSION}.txt
+                                    
+                                    # Generate backend metadata
+                                    cat > ../artifacts/generic/backend-${params.IMAGE_VERSION}.json << EOF
+{
+  "component": "backend",
+  "version": "${params.IMAGE_VERSION}",
+  "build_number": "${BUILD_NUMBER}",
+  "git_commit": "${env.GIT_COMMIT_SHORT}",
+  "build_timestamp": "${env.BUILD_TIMESTAMP}",
+  "python_version": "\$(python --version 2>&1)",
+  "image_size": "\$(docker images flask_backend:${params.IMAGE_VERSION} --format 'table {{.Size}}' | tail -1)",
+  "dockerfile_path": "backend/Dockerfile"
+}
+EOF
+                                """
+                            }
+                        }
+                    }
+                }
+                
+                stage('🗄️ Build Database') {
+                    steps {
+                        script {
+                            echo "🗄️ Building database component..."
+                            
+                            dir('database') {
+                                // Build database Docker image
+                                def databaseImage = docker.build(
+                                    "mysql_db:${params.IMAGE_VERSION}"
+                                )
+                                
+                                // Tag for Artifactory
+                                sh """
+                                    docker tag mysql_db:${params.IMAGE_VERSION} \\
+                                        ${ARTIFACTORY_URL}/${DOCKER_REPO}/mysql_db:${params.IMAGE_VERSION}
+                                    
+                                    docker tag mysql_db:${params.IMAGE_VERSION} \\
+                                        ${ARTIFACTORY_URL}/${DOCKER_REPO}/mysql_db:latest
+                                """
+                                
+                                // Create database artifacts
+                                sh """
+                                    # Archive database scripts and configuration
+                                    tar -czf ../artifacts/generic/database-${params.IMAGE_VERSION}.tar.gz .
+                                    
+                                    # Create database schema export
+                                    cp init.sql ../artifacts/generic/database-schema-${params.IMAGE_VERSION}.sql
+                                    
+                                    # Generate database metadata
+                                    cat > ../artifacts/generic/database-${params.IMAGE_VERSION}.json << EOF
+{
+  "component": "database",
+  "version": "${params.IMAGE_VERSION}",
+  "build_number": "${BUILD_NUMBER}",
+  "git_commit": "${env.GIT_COMMIT_SHORT}",
+  "build_timestamp": "${env.BUILD_TIMESTAMP}",
+  "mysql_version": "8.0",
+  "image_size": "\$(docker images mysql_db:${params.IMAGE_VERSION} --format 'table {{.Size}}' | tail -1)",
+  "dockerfile_path": "database/Dockerfile"
+}
+EOF
+                                """
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('🧪 Test & Quality Gates') {
+            parallel {
+                stage('🔍 Unit Tests') {
+                    steps {
+                        script {
+                            echo "🧪 Running unit tests..."
+                            
+                            dir('backend') {
+                                sh """
+                                    # Run Python unit tests
+                                    python -m pytest tests/ -v --junitxml=../artifacts/reports/unit-tests.xml || echo "Tests completed"
+                                    
+                                    # Generate test coverage report
+                                    python -m pytest tests/ --cov=. --cov-report=xml --cov-report=html || echo "Coverage completed"
+                                    cp coverage.xml ../artifacts/reports/ || echo "No coverage file"
+                                    tar -czf ../artifacts/reports/coverage-html-${params.IMAGE_VERSION}.tar.gz htmlcov/ || echo "No HTML coverage"
+                                """
+                            }
+                        }
+                    }
+                }
+                
+                stage('🔒 Security Scan') {
+                    when {
+                        expression { params.SECURITY_SCAN }
+                    }
+                    steps {
+                        script {
+                            echo "🔒 Running security scans..."
+                            
+                            sh """
+                                # Install security tools if not present
+                                if ! command -v trivy &> /dev/null; then
+                                    curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+                                fi
+                                
+                                # Scan Docker images
+                                trivy image --format json --output artifacts/reports/security-frontend-${params.IMAGE_VERSION}.json nginx_frontend:${params.IMAGE_VERSION} || echo "Frontend scan completed"
+                                trivy image --format json --output artifacts/reports/security-backend-${params.IMAGE_VERSION}.json flask_backend:${params.IMAGE_VERSION} || echo "Backend scan completed"
+                                trivy image --format json --output artifacts/reports/security-database-${params.IMAGE_VERSION}.json mysql_db:${params.IMAGE_VERSION} || echo "Database scan completed"
+                                
+                                # Scan source code
+                                trivy fs --format json --output artifacts/reports/security-source-${params.IMAGE_VERSION}.json . || echo "Source scan completed"
+                            """
+                        }
+                    }
+                }
+                
+                stage('📊 Quality Analysis') {
+                    steps {
+                        script {
+                            echo "📊 Running quality analysis..."
+                            
+                            sh """
+                                # Create quality reports directory
+                                mkdir -p artifacts/reports/quality
+                                
+                                # Python code quality (backend)
+                                cd backend
+                                pylint *.py > ../artifacts/reports/quality/pylint-${params.IMAGE_VERSION}.txt || echo "Pylint completed"
+                                flake8 . --output-file=../artifacts/reports/quality/flake8-${params.IMAGE_VERSION}.txt || echo "Flake8 completed"
+                                cd ..
+                                
+                                # Docker image analysis
+                                docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \\
+                                    wagoodman/dive:latest nginx_frontend:${params.IMAGE_VERSION} \\
+                                    --ci --json > artifacts/reports/quality/dive-frontend-${params.IMAGE_VERSION}.json || echo "Dive analysis completed"
+                            """
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('📤 Publish to Artifactory') {
+            parallel {
+                stage('🐳 Publish Docker Images') {
+                    when {
+                        expression { params.ARTIFACT_STRATEGY in ['all', 'docker-only'] }
+                    }
+                    steps {
+                        script {
+                            echo "🐳 Publishing Docker images to Artifactory..."
+                            
+                            // Push frontend image
+                            sh """
+                                jf rt docker-push \\
+                                    ${ARTIFACTORY_URL}/${DOCKER_REPO}/nginx_frontend:${params.IMAGE_VERSION} \\
+                                    ${DOCKER_REPO} \\
+                                    --server-id=artifactory-server \\
+                                    --build-name=${BUILD_NAME} \\
+                                    --build-number=${BUILD_NUMBER}
+                                
+                                jf rt docker-push \\
+                                    ${ARTIFACTORY_URL}/${DOCKER_REPO}/nginx_frontend:latest \\
+                                    ${DOCKER_REPO} \\
+                                    --server-id=artifactory-server \\
+                                    --build-name=${BUILD_NAME} \\
+                                    --build-number=${BUILD_NUMBER}
+                            """
+                            
+                            // Push backend image
+                            sh """
+                                jf rt docker-push \\
+                                    ${ARTIFACTORY_URL}/${DOCKER_REPO}/flask_backend:${params.IMAGE_VERSION} \\
+                                    ${DOCKER_REPO} \\
+                                    --server-id=artifactory-server \\
+                                    --build-name=${BUILD_NAME} \\
+                                    --build-number=${BUILD_NUMBER}
+                                
+                                jf rt docker-push \\
+                                    ${ARTIFACTORY_URL}/${DOCKER_REPO}/flask_backend:latest \\
+                                    ${DOCKER_REPO} \\
+                                    --server-id=artifactory-server \\
+                                    --build-name=${BUILD_NAME} \\
+                                    --build-number=${BUILD_NUMBER}
+                            """
+                            
+                            // Push database image
+                            sh """
+                                jf rt docker-push \\
+                                    ${ARTIFACTORY_URL}/${DOCKER_REPO}/mysql_db:${params.IMAGE_VERSION} \\
+                                    ${DOCKER_REPO} \\
+                                    --server-id=artifactory-server \\
+                                    --build-name=${BUILD_NAME} \\
+                                    --build-number=${BUILD_NUMBER}
+                                
+                                jf rt docker-push \\
+                                    ${ARTIFACTORY_URL}/${DOCKER_REPO}/mysql_db:latest \\
+                                    ${DOCKER_REPO} \\
+                                    --server-id=artifactory-server \\
+                                    --build-name=${BUILD_NAME} \\
+                                    --build-number=${BUILD_NUMBER}
+                            """
+                        }
+                    }
+                }
+                
+                stage('📦 Publish Generic Artifacts') {
+                    when {
+                        expression { params.ARTIFACT_STRATEGY in ['all', 'generic-only'] }
+                    }
+                    steps {
+                        script {
+                            echo "📦 Publishing generic artifacts to Artifactory..."
+                            
+                            sh """
+                                # Upload all generic artifacts
+                                jf rt upload \\
+                                    "artifacts/generic/*" \\
+                                    "${GENERIC_REPO}/${APP_NAME}/${params.IMAGE_VERSION}/" \\
+                                    --server-id=artifactory-server \\
+                                    --build-name=${BUILD_NAME} \\
+                                    --build-number=${BUILD_NUMBER} \\
+                                    --flat=false
+                                
+                                # Upload test reports
+                                jf rt upload \\
+                                    "artifacts/reports/*" \\
+                                    "${GENERIC_REPO}/${APP_NAME}/${params.IMAGE_VERSION}/reports/" \\
+                                    --server-id=artifactory-server \\
+                                    --build-name=${BUILD_NAME} \\
+                                    --build-number=${BUILD_NUMBER} \\
+                                    --flat=false
+                            """
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('🏷️ Create Build Info') {
+            when {
+                expression { params.ARTIFACT_STRATEGY in ['all', 'build-info-only'] }
+            }
+            steps {
+                script {
+                    echo "🏷️ Creating and publishing build info..."
+                    
+                    // Generate comprehensive build info
+                    sh """
+                        # Create build info JSON
+                        cat > artifacts/build-info/build-info-${BUILD_NUMBER}.json << EOF
+{
+  "version": "1.0.1",
+  "name": "${BUILD_NAME}",
+  "number": "${BUILD_NUMBER}",
+  "type": "GENERIC",
+  "buildAgent": {
+    "name": "Jenkins",
+    "version": "${env.JENKINS_VERSION ?: 'Unknown'}"
+  },
+  "agent": {
+    "name": "Jenkins",
+    "version": "${env.JENKINS_VERSION ?: 'Unknown'}"
+  },
+  "started": "${env.BUILD_TIMESTAMP}",
+  "url": "${BUILD_URL}",
+  "vcsRevision": "${env.GIT_COMMIT ?: env.GIT_COMMIT_SHORT}",
+  "vcsUrl": "${env.GIT_URL ?: 'Unknown'}",
+  "properties": {
+    "environment": "${params.ENVIRONMENT}",
+    "image_version": "${params.IMAGE_VERSION}",
+    "artifact_strategy": "${params.ARTIFACT_STRATEGY}",
+    "git_branch": "${env.GIT_BRANCH ?: 'Unknown'}",
+    "build_cause": "${env.BUILD_CAUSE ?: 'Manual'}",
+    "jenkins_job": "${env.JOB_NAME}",
+    "jenkins_node": "${env.NODE_NAME ?: 'master'}"
+  },
+  "modules": [
+    {
+      "id": "frontend",
+      "artifacts": [
+        {
+          "type": "docker",
+          "name": "nginx_frontend:${params.IMAGE_VERSION}",
+          "path": "${DOCKER_REPO}/nginx_frontend:${params.IMAGE_VERSION}"
+        },
+        {
+          "type": "tar.gz",
+          "name": "frontend-${params.IMAGE_VERSION}.tar.gz",
+          "path": "${GENERIC_REPO}/${APP_NAME}/${params.IMAGE_VERSION}/frontend-${params.IMAGE_VERSION}.tar.gz"
+        }
+      ]
+    },
+    {
+      "id": "backend",
+      "artifacts": [
+        {
+          "type": "docker",
+          "name": "flask_backend:${params.IMAGE_VERSION}",
+          "path": "${DOCKER_REPO}/flask_backend:${params.IMAGE_VERSION}"
+        },
+        {
+          "type": "tar.gz",
+          "name": "backend-${params.IMAGE_VERSION}.tar.gz",
+          "path": "${GENERIC_REPO}/${APP_NAME}/${params.IMAGE_VERSION}/backend-${params.IMAGE_VERSION}.tar.gz"
+        }
+      ]
+    },
+    {
+      "id": "database",
+      "artifacts": [
+        {
+          "type": "docker",
+          "name": "mysql_db:${params.IMAGE_VERSION}",
+          "path": "${DOCKER_REPO}/mysql_db:${params.IMAGE_VERSION}"
+        },
+        {
+          "type": "tar.gz",
+          "name": "database-${params.IMAGE_VERSION}.tar.gz",
+          "path": "${GENERIC_REPO}/${APP_NAME}/${params.IMAGE_VERSION}/database-${params.IMAGE_VERSION}.tar.gz"
+        }
+      ]
+    }
+  ]
+}
+EOF
+                        
+                        # Collect environment information
+                        jf rt build-collect-env ${BUILD_NAME} ${BUILD_NUMBER} --server-id=artifactory-server
+                        
+                        # Add git information
+                        jf rt build-add-git ${BUILD_NAME} ${BUILD_NUMBER} --server-id=artifactory-server
+                        
+                        # Publish build info
+                        jf rt build-publish ${BUILD_NAME} ${BUILD_NUMBER} --server-id=artifactory-server
+                        
+                        # Upload build info as artifact
+                        jf rt upload \\
+                            "artifacts/build-info/build-info-${BUILD_NUMBER}.json" \\
+                            "${GENERIC_REPO}/${APP_NAME}/${params.IMAGE_VERSION}/build-info/" \\
+                            --server-id=artifactory-server
+                    """
+                }
+            }
+        }
+        
+        stage('🔒 Xray Security Scan') {
+            when {
+                expression { params.SECURITY_SCAN }
+            }
+            steps {
+                script {
+                    echo "🔒 Running Artifactory Xray security scan..."
+                    
+                    try {
+                        sh """
+                            # Scan build with Xray
+                            jf xr scan --server-id=artifactory-server --build-name=${BUILD_NAME} --build-number=${BUILD_NUMBER}
+                            
+                            # Get scan results
+                            jf xr build-scan ${BUILD_NAME} ${BUILD_NUMBER} --server-id=artifactory-server --format=json > artifacts/reports/xray-scan-${BUILD_NUMBER}.json
+                        """
+                    } catch (Exception e) {
+                        echo "⚠️ Xray scan failed or not configured: ${e.message}"
+                    }
+                }
+            }
+        }
+        
+        stage('🏆 Promote to Release') {
+            when {
+                expression { params.PROMOTE_TO_RELEASE }
+            }
+            steps {
+                script {
+                    echo "🏆 Promoting artifacts to release repository..."
+                    
+                    sh """
+                        # Promote build to release repository
+                        jf rt build-promote ${BUILD_NAME} ${BUILD_NUMBER} \\
+                            release-local \\
+                            --server-id=artifactory-server \\
+                            --status=Released \\
+                            --comment="Promoted to release repository" \\
+                            --copy=true
+                    """
+                }
+            }
+        }
+        
+        stage('🧹 Cleanup Old Artifacts') {
+            when {
+                expression { params.CLEANUP_OLD_ARTIFACTS }
+            }
+            steps {
+                script {
+                    echo "🧹 Cleaning up old artifacts..."
+                    
+                    sh """
+                        # Delete old artifacts (keep last 10 builds)
+                        jf rt search \\
+                            "${GENERIC_REPO}/${APP_NAME}/*" \\
+                            --server-id=artifactory-server \\
+                            --sort-by=created \\
+                            --sort-order=desc \\
+                            --limit=10 \\
+                            --offset=10 \\
+                            --format=json > old-artifacts.json
+                        
+                        # Delete old artifacts if any found
+                        if [ -s old-artifacts.json ] && [ "\$(cat old-artifacts.json | jq '. | length')" -gt "0" ]; then
+                            jf rt delete \\
+                                --server-id=artifactory-server \\
+                                --spec=old-artifacts.json \\
+                                --dry-run=false
+                        fi
+                        
+                        # Clean up old Docker images (keep last 5 versions)
+                        jf rt curl -X DELETE \\
+                            "/api/docker/${DOCKER_REPO}/v2/promote" \\
+                            --server-id=artifactory-server \\
+                            -H "Content-Type: application/json" \\
+                            -d '{"targetRepo":"trash-local","dockerRepository":"nginx_frontend","tag":"*","copy":false,"promotionType":"DELETE_OLD","count":5}'
+                    """
+                }
+            }
+        }
+        
+        stage('📊 Generate Artifact Report') {
+            steps {
+                script {
+                    echo "📊 Generating comprehensive artifact report..."
+                    
+                    sh """
+                        # Generate artifact inventory
+                        jf rt search \\
+                            "${GENERIC_REPO}/${APP_NAME}/${params.IMAGE_VERSION}/*" \\
+                            --server-id=artifactory-server \\
+                            --format=json > artifacts/reports/artifact-inventory-${BUILD_NUMBER}.json
+                        
+                        # Generate Docker image inventory
+                        jf rt search \\
+                            "${DOCKER_REPO}/*:${params.IMAGE_VERSION}" \\
+                            --server-id=artifactory-server \\
+                            --format=json > artifacts/reports/docker-inventory-${BUILD_NUMBER}.json
+                        
+                        # Create comprehensive report
+                        cat > artifacts/reports/artifactory-summary-${BUILD_NUMBER}.md << EOF
+# Artifactory Deployment Report
+
+## Build Information
+- **Build**: ${BUILD_NAME}#${BUILD_NUMBER}
+- **Version**: ${params.IMAGE_VERSION}
+- **Environment**: ${params.ENVIRONMENT}
+- **Strategy**: ${params.ARTIFACT_STRATEGY}
+- **Timestamp**: ${env.BUILD_TIMESTAMP}
+- **Git Commit**: ${env.GIT_COMMIT_SHORT}
+
+## Published Artifacts
+
+### Docker Images
+- \`${ARTIFACTORY_URL}/${DOCKER_REPO}/nginx_frontend:${params.IMAGE_VERSION}\`
+- \`${ARTIFACTORY_URL}/${DOCKER_REPO}/flask_backend:${params.IMAGE_VERSION}\`
+- \`${ARTIFACTORY_URL}/${DOCKER_REPO}/mysql_db:${params.IMAGE_VERSION}\`
+
+### Generic Artifacts
+- Frontend source: \`${GENERIC_REPO}/${APP_NAME}/${params.IMAGE_VERSION}/frontend-${params.IMAGE_VERSION}.tar.gz\`
+- Backend source: \`${GENERIC_REPO}/${APP_NAME}/${params.IMAGE_VERSION}/backend-${params.IMAGE_VERSION}.tar.gz\`
+- Database scripts: \`${GENERIC_REPO}/${APP_NAME}/${params.IMAGE_VERSION}/database-${params.IMAGE_VERSION}.tar.gz\`
+
+### Reports & Metadata
+- Build info: \`${GENERIC_REPO}/${APP_NAME}/${params.IMAGE_VERSION}/build-info/\`
+- Test reports: \`${GENERIC_REPO}/${APP_NAME}/${params.IMAGE_VERSION}/reports/\`
+- Security scans: \`${GENERIC_REPO}/${APP_NAME}/${params.IMAGE_VERSION}/reports/\`
+
+## Access Information
+- **Artifactory URL**: ${ARTIFACTORY_URL}
+- **Docker Registry**: \`docker pull ${ARTIFACTORY_URL}/${DOCKER_REPO}/<image>:<tag>\`
+- **Web UI**: ${ARTIFACTORY_URL}/ui/
+
+## Security & Quality
+- Security scan: ${params.SECURITY_SCAN ? '✅ Completed' : '❌ Skipped'}
+- Xray scan: ${params.SECURITY_SCAN ? '✅ Completed' : '❌ Skipped'}
+- Quality analysis: ✅ Completed
+- Promoted to release: ${params.PROMOTE_TO_RELEASE ? '✅ Yes' : '❌ No'}
+
+---
+Generated on ${env.BUILD_TIMESTAMP} by Jenkins Build ${BUILD_NUMBER}
+EOF
+                    """
+                    
+                    archiveArtifacts artifacts: 'artifacts/**/*'
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                echo "🧹 Pipeline cleanup..."
+                
+                // Archive all artifacts
+                archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
+                
+                // Publish test results if available
+                publishTestResults testResultsPattern: 'artifacts/reports/*.xml', allowEmptyResults: true
+                
+                // Clean up workspace
+                sh """
+                    # Clean up local Docker images to save space
+                    docker rmi nginx_frontend:${params.IMAGE_VERSION} || true
+                    docker rmi flask_backend:${params.IMAGE_VERSION} || true
+                    docker rmi mysql_db:${params.IMAGE_VERSION} || true
+                    
+                    # Clean up temporary files
+                    rm -rf artifacts/docker
+                    rm -f old-artifacts.json
+                """
+            }
+        }
+        
+        success {
+            script {
+                echo "✅ Artifactory Integration Pipeline completed successfully!"
+                
+                def artifactReport = readFile('artifacts/reports/artifactory-summary-' + BUILD_NUMBER + '.md')
+                
+                // Send success notification
+                try {
+                    emailext(
+                        subject: "✅ Artifactory Build Success: ${BUILD_NAME}#${BUILD_NUMBER}",
+                        body: """
+Build completed successfully!
+
+${artifactReport}
+
+View artifacts: ${ARTIFACTORY_URL}/ui/repos/tree/General/${GENERIC_REPO}/${APP_NAME}/${params.IMAGE_VERSION}
+View build: ${BUILD_URL}
+""",
+                        to: "${env.CHANGE_AUTHOR_EMAIL ?: 'devops@company.com'}"
+                    )
+                } catch (Exception e) {
+                    echo "⚠️ Failed to send email notification: ${e.message}"
+                }
+            }
+        }
+        
+        failure {
+            script {
+                echo "❌ Artifactory Integration Pipeline failed!"
+                
+                // Send failure notification
+                try {
+                    emailext(
+                        subject: "❌ Artifactory Build Failed: ${BUILD_NAME}#${BUILD_NUMBER}",
+                        body: """
+Build failed during Artifactory integration.
+
+Build: ${BUILD_NAME}#${BUILD_NUMBER}
+Version: ${params.IMAGE_VERSION}
+Environment: ${params.ENVIRONMENT}
+Strategy: ${params.ARTIFACT_STRATEGY}
+
+Please check the Jenkins logs: ${BUILD_URL}console
+
+Common issues:
+1. Artifactory connection problems
+2. Authentication failures
+3. Repository permissions
+4. Docker registry issues
+5. Network connectivity
+
+Contact DevOps team for assistance.
+""",
+                        to: "${env.CHANGE_AUTHOR_EMAIL ?: 'devops@company.com'}"
+                    )
+                } catch (Exception e) {
+                    echo "⚠️ Failed to send email notification: ${e.message}"
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,287 @@
+{
+  "version": "1.0.1",
+  "name": "${BUILD_NAME}",
+  "number": "${BUILD_NUMBER}",
+  "type": "GENERIC",
+  "buildAgent": {
+    "name": "Jenkins",
+    "version": "${JENKINS_VERSION}"
+  },
+  "agent": {
+    "name": "Jenkins",
+    "version": "${JENKINS_VERSION}"
+  },
+  "started": "${BUILD_TIMESTAMP}",
+  "durationMillis": "${BUILD_DURATION}",
+  "principal": "${BUILD_USER}",
+  "artifactoryPrincipal": "${ARTIFACTORY_USER}",
+  "url": "${BUILD_URL}",
+  "vcsRevision": "${GIT_COMMIT}",
+  "vcsUrl": "${GIT_URL}",
+  "vcs": [
+    {
+      "type": "git",
+      "revision": "${GIT_COMMIT}",
+      "url": "${GIT_URL}",
+      "branch": "${GIT_BRANCH}"
+    }
+  ],
+  "licenseControl": {
+    "runChecks": true,
+    "includePublishedArtifacts": false,
+    "autoDiscover": true,
+    "scopesList": "compile,runtime"
+  },
+  "buildRetention": {
+    "count": 10,
+    "deleteBuildArtifacts": true,
+    "buildNumbersNotToBeDiscarded": []
+  },
+  "governance": {
+    "blackDuckProperties": {
+      "runChecks": false,
+      "appName": "",
+      "appVersion": "",
+      "reportRecipients": "",
+      "scopes": "",
+      "includePublishedArtifacts": false,
+      "autoCreateMissingComponentRequests": false,
+      "autoDiscardStaleComponentRequests": false
+    }
+  },
+  "properties": {
+    "buildInfo.env.BUILD_CAUSE": "${BUILD_CAUSE}",
+    "buildInfo.env.BUILD_DISPLAY_NAME": "${BUILD_DISPLAY_NAME}",
+    "buildInfo.env.BUILD_ID": "${BUILD_ID}",
+    "buildInfo.env.BUILD_NUMBER": "${BUILD_NUMBER}",
+    "buildInfo.env.BUILD_TAG": "${BUILD_TAG}",
+    "buildInfo.env.BUILD_URL": "${BUILD_URL}",
+    "buildInfo.env.EXECUTOR_NUMBER": "${EXECUTOR_NUMBER}",
+    "buildInfo.env.GIT_BRANCH": "${GIT_BRANCH}",
+    "buildInfo.env.GIT_COMMIT": "${GIT_COMMIT}",
+    "buildInfo.env.GIT_URL": "${GIT_URL}",
+    "buildInfo.env.JENKINS_URL": "${JENKINS_URL}",
+    "buildInfo.env.JOB_NAME": "${JOB_NAME}",
+    "buildInfo.env.NODE_NAME": "${NODE_NAME}",
+    "buildInfo.env.WORKSPACE": "${WORKSPACE}",
+    "artifact.deployment.environment": "${ENVIRONMENT}",
+    "artifact.deployment.version": "${IMAGE_VERSION}",
+    "artifact.deployment.strategy": "${DEPLOYMENT_STRATEGY}",
+    "artifact.security.scan": "${SECURITY_SCAN_STATUS}",
+    "artifact.quality.gate": "${QUALITY_GATE_STATUS}",
+    "artifact.test.status": "${TEST_STATUS}",
+    "artifact.created.by": "${BUILD_USER}",
+    "artifact.created.timestamp": "${BUILD_TIMESTAMP}"
+  },
+  "modules": [
+    {
+      "id": "frontend",
+      "type": "docker",
+      "repository": "docker-local",
+      "artifacts": [
+        {
+          "type": "docker",
+          "name": "nginx_frontend",
+          "path": "nginx_frontend:${IMAGE_VERSION}",
+          "remotePath": "nginx_frontend:${IMAGE_VERSION}",
+          "sha1": "${FRONTEND_SHA1}",
+          "sha256": "${FRONTEND_SHA256}",
+          "md5": "${FRONTEND_MD5}",
+          "size": "${FRONTEND_SIZE}",
+          "properties": {
+            "docker.image.id": "${FRONTEND_IMAGE_ID}",
+            "docker.image.size": "${FRONTEND_SIZE}",
+            "docker.image.created": "${FRONTEND_CREATED}",
+            "docker.image.architecture": "amd64",
+            "docker.image.os": "linux",
+            "component.name": "frontend",
+            "component.type": "web-server",
+            "component.technology": "nginx",
+            "component.version": "${IMAGE_VERSION}"
+          }
+        },
+        {
+          "type": "tar.gz",
+          "name": "frontend-${IMAGE_VERSION}.tar.gz",
+          "path": "microservice-admin-app/${IMAGE_VERSION}/frontend-${IMAGE_VERSION}.tar.gz",
+          "sha1": "${FRONTEND_TAR_SHA1}",
+          "md5": "${FRONTEND_TAR_MD5}",
+          "size": "${FRONTEND_TAR_SIZE}",
+          "properties": {
+            "artifact.type": "source-archive",
+            "component.name": "frontend",
+            "component.version": "${IMAGE_VERSION}"
+          }
+        }
+      ],
+      "dependencies": [],
+      "excludedArtifacts": [],
+      "properties": {
+        "module.type": "frontend",
+        "module.technology": "nginx",
+        "module.version": "${IMAGE_VERSION}"
+      }
+    },
+    {
+      "id": "backend",
+      "type": "docker",
+      "repository": "docker-local",
+      "artifacts": [
+        {
+          "type": "docker",
+          "name": "flask_backend",
+          "path": "flask_backend:${IMAGE_VERSION}",
+          "remotePath": "flask_backend:${IMAGE_VERSION}",
+          "sha1": "${BACKEND_SHA1}",
+          "sha256": "${BACKEND_SHA256}",
+          "md5": "${BACKEND_MD5}",
+          "size": "${BACKEND_SIZE}",
+          "properties": {
+            "docker.image.id": "${BACKEND_IMAGE_ID}",
+            "docker.image.size": "${BACKEND_SIZE}",
+            "docker.image.created": "${BACKEND_CREATED}",
+            "docker.image.architecture": "amd64",
+            "docker.image.os": "linux",
+            "component.name": "backend",
+            "component.type": "api-server",
+            "component.technology": "flask",
+            "component.version": "${IMAGE_VERSION}"
+          }
+        },
+        {
+          "type": "tar.gz",
+          "name": "backend-${IMAGE_VERSION}.tar.gz",
+          "path": "microservice-admin-app/${IMAGE_VERSION}/backend-${IMAGE_VERSION}.tar.gz",
+          "sha1": "${BACKEND_TAR_SHA1}",
+          "md5": "${BACKEND_TAR_MD5}",
+          "size": "${BACKEND_TAR_SIZE}",
+          "properties": {
+            "artifact.type": "source-archive",
+            "component.name": "backend",
+            "component.version": "${IMAGE_VERSION}"
+          }
+        },
+        {
+          "type": "txt",
+          "name": "backend-requirements-${IMAGE_VERSION}.txt",
+          "path": "microservice-admin-app/${IMAGE_VERSION}/backend-requirements-${IMAGE_VERSION}.txt",
+          "sha1": "${REQUIREMENTS_SHA1}",
+          "md5": "${REQUIREMENTS_MD5}",
+          "size": "${REQUIREMENTS_SIZE}",
+          "properties": {
+            "artifact.type": "dependency-list",
+            "component.name": "backend",
+            "component.version": "${IMAGE_VERSION}"
+          }
+        }
+      ],
+      "dependencies": [
+        {
+          "type": "pypi",
+          "id": "flask:${FLASK_VERSION}",
+          "scopes": ["compile", "runtime"],
+          "requestedBy": [["backend", "requirements.txt"]]
+        },
+        {
+          "type": "pypi", 
+          "id": "mysql-connector-python:${MYSQL_CONNECTOR_VERSION}",
+          "scopes": ["compile", "runtime"],
+          "requestedBy": [["backend", "requirements.txt"]]
+        }
+      ],
+      "excludedArtifacts": [],
+      "properties": {
+        "module.type": "backend",
+        "module.technology": "flask",
+        "module.language": "python",
+        "module.version": "${IMAGE_VERSION}"
+      }
+    },
+    {
+      "id": "database",
+      "type": "docker",
+      "repository": "docker-local",
+      "artifacts": [
+        {
+          "type": "docker",
+          "name": "mysql_db",
+          "path": "mysql_db:${IMAGE_VERSION}",
+          "remotePath": "mysql_db:${IMAGE_VERSION}",
+          "sha1": "${DATABASE_SHA1}",
+          "sha256": "${DATABASE_SHA256}",
+          "md5": "${DATABASE_MD5}",
+          "size": "${DATABASE_SIZE}",
+          "properties": {
+            "docker.image.id": "${DATABASE_IMAGE_ID}",
+            "docker.image.size": "${DATABASE_SIZE}",
+            "docker.image.created": "${DATABASE_CREATED}",
+            "docker.image.architecture": "amd64",
+            "docker.image.os": "linux",
+            "component.name": "database",
+            "component.type": "database",
+            "component.technology": "mysql",
+            "component.version": "${IMAGE_VERSION}"
+          }
+        },
+        {
+          "type": "tar.gz",
+          "name": "database-${IMAGE_VERSION}.tar.gz",
+          "path": "microservice-admin-app/${IMAGE_VERSION}/database-${IMAGE_VERSION}.tar.gz",
+          "sha1": "${DATABASE_TAR_SHA1}",
+          "md5": "${DATABASE_TAR_MD5}",
+          "size": "${DATABASE_TAR_SIZE}",
+          "properties": {
+            "artifact.type": "source-archive",
+            "component.name": "database",
+            "component.version": "${IMAGE_VERSION}"
+          }
+        },
+        {
+          "type": "sql",
+          "name": "database-schema-${IMAGE_VERSION}.sql",
+          "path": "microservice-admin-app/${IMAGE_VERSION}/database-schema-${IMAGE_VERSION}.sql",
+          "sha1": "${SCHEMA_SHA1}",
+          "md5": "${SCHEMA_MD5}",
+          "size": "${SCHEMA_SIZE}",
+          "properties": {
+            "artifact.type": "database-schema",
+            "component.name": "database",
+            "component.version": "${IMAGE_VERSION}"
+          }
+        }
+      ],
+      "dependencies": [],
+      "excludedArtifacts": [],
+      "properties": {
+        "module.type": "database",
+        "module.technology": "mysql",
+        "module.version": "${IMAGE_VERSION}"
+      }
+    }
+  ],
+  "issues": {
+    "tracker": {
+      "name": "GitHub Issues",
+      "version": "1.0"
+    },
+    "aggregateBuildIssues": true,
+    "aggregationBuildStatus": "Released",
+    "affectedIssues": [
+      {
+        "key": "${JIRA_ISSUE_KEY}",
+        "url": "${JIRA_ISSUE_URL}",
+        "summary": "${JIRA_ISSUE_SUMMARY}"
+      }
+    ]
+  },
+  "statuses": [
+    {
+      "status": "staged",
+      "comment": "Build artifacts staged in Artifactory",
+      "ciUrl": "${BUILD_URL}",
+      "timestamp": "${BUILD_TIMESTAMP}",
+      "user": "${BUILD_USER}",
+      "repository": "generic-local"
+    }
+  ]
+}

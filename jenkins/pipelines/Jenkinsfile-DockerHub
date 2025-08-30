@@ -1,0 +1,329 @@
+#!/usr/bin/env groovy
+
+pipeline {
+    agent any
+    
+    environment {
+        // Docker Hub credentials (configure in Jenkins)
+        DOCKER_HUB_CREDENTIALS = credentials('docker-hub-credentials')
+        DOCKER_HUB_REPO = 'shivamsingh163248'
+        IMAGE_VERSION = "v1.0.${BUILD_NUMBER}"
+        
+        // Application configuration
+        APP_NAME = 'microservice-admin-app'
+        FRONTEND_IMAGE = "${DOCKER_HUB_REPO}/nginx_frontend"
+        BACKEND_IMAGE = "${DOCKER_HUB_REPO}/flask_backend"
+        DATABASE_IMAGE = "${DOCKER_HUB_REPO}/mysql_db"
+        
+        // Testing configuration
+        TEST_CONTAINER_PREFIX = "test-${BUILD_NUMBER}"
+        TEST_NETWORK = "test-network-${BUILD_NUMBER}"
+    }
+    
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'production'],
+            description: 'Target deployment environment'
+        )
+        booleanParam(
+            name: 'SKIP_TESTS',
+            defaultValue: false,
+            description: 'Skip testing phase'
+        )
+        booleanParam(
+            name: 'DEPLOY_AFTER_BUILD',
+            defaultValue: true,
+            description: 'Deploy to environment after successful build'
+        )
+    }
+    
+    stages {
+        stage('🔍 Preparation') {
+            steps {
+                script {
+                    echo "🚀 Starting Jenkins Pipeline for ${APP_NAME}"
+                    echo "📦 Version: ${IMAGE_VERSION}"
+                    echo "🎯 Environment: ${params.ENVIRONMENT}"
+                    echo "🔧 Build Number: ${BUILD_NUMBER}"
+                    
+                    // Clean workspace
+                    sh 'docker system prune -f || true'
+                    
+                    // Create test network
+                    sh "docker network create ${TEST_NETWORK} || true"
+                }
+            }
+        }
+        
+        stage('🏗️ Build Images') {
+            parallel {
+                stage('Build Frontend') {
+                    steps {
+                        script {
+                            echo "🏗️ Building Frontend Image..."
+                            sh """
+                                cd frontend
+                                docker build -t ${FRONTEND_IMAGE}:${IMAGE_VERSION} .
+                                docker tag ${FRONTEND_IMAGE}:${IMAGE_VERSION} ${FRONTEND_IMAGE}:latest
+                            """
+                        }
+                    }
+                }
+                stage('Build Backend') {
+                    steps {
+                        script {
+                            echo "🏗️ Building Backend Image..."
+                            sh """
+                                cd backend
+                                docker build -t ${BACKEND_IMAGE}:${IMAGE_VERSION} .
+                                docker tag ${BACKEND_IMAGE}:${IMAGE_VERSION} ${BACKEND_IMAGE}:latest
+                            """
+                        }
+                    }
+                }
+                stage('Build Database') {
+                    steps {
+                        script {
+                            echo "🏗️ Building Database Image..."
+                            sh """
+                                cd database
+                                docker build -t ${DATABASE_IMAGE}:${IMAGE_VERSION} .
+                                docker tag ${DATABASE_IMAGE}:${IMAGE_VERSION} ${DATABASE_IMAGE}:latest
+                            """
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('🧪 Testing Phase') {
+            when {
+                not { params.SKIP_TESTS }
+            }
+            steps {
+                script {
+                    echo "🧪 Starting comprehensive testing..."
+                    
+                    try {
+                        // Start test database
+                        sh """
+                            docker run -d --name ${TEST_CONTAINER_PREFIX}-db \
+                                --network ${TEST_NETWORK} \
+                                -e MYSQL_ROOT_PASSWORD=rootpass \
+                                -e MYSQL_DATABASE=adminapp \
+                                -e MYSQL_USER=adminuser \
+                                -e MYSQL_PASSWORD=adminpass \
+                                -p 3307:3306 \
+                                ${DATABASE_IMAGE}:${IMAGE_VERSION}
+                        """
+                        
+                        // Wait for database to be ready
+                        sh """
+                            echo "⏳ Waiting for database to be ready..."
+                            sleep 30
+                            
+                            # Test database connection
+                            docker run --rm --network ${TEST_NETWORK} \
+                                mysql:5.7 mysqladmin ping -h${TEST_CONTAINER_PREFIX}-db -uroot -prootpass
+                        """
+                        
+                        // Start test backend
+                        sh """
+                            docker run -d --name ${TEST_CONTAINER_PREFIX}-backend \
+                                --network ${TEST_NETWORK} \
+                                -e DB_HOST=${TEST_CONTAINER_PREFIX}-db \
+                                -e DB_USER=adminuser \
+                                -e DB_PASS=adminpass \
+                                -e DB_NAME=adminapp \
+                                -p 5002:5000 \
+                                ${BACKEND_IMAGE}:${IMAGE_VERSION}
+                        """
+                        
+                        // Wait for backend to be ready
+                        sh """
+                            echo "⏳ Waiting for backend to be ready..."
+                            sleep 15
+                            
+                            # Test backend health
+                            for i in {1..10}; do
+                                if curl -f http://localhost:5002/health; then
+                                    echo "✅ Backend health check passed"
+                                    break
+                                fi
+                                echo "⏳ Attempt \$i failed, retrying..."
+                                sleep 3
+                            done
+                        """
+                        
+                        // Start test frontend
+                        sh """
+                            docker run -d --name ${TEST_CONTAINER_PREFIX}-frontend \
+                                --network ${TEST_NETWORK} \
+                                -p 8082:80 \
+                                ${FRONTEND_IMAGE}:${IMAGE_VERSION}
+                        """
+                        
+                        // Test frontend
+                        sh """
+                            echo "⏳ Waiting for frontend to be ready..."
+                            sleep 10
+                            
+                            # Test frontend accessibility
+                            curl -f http://localhost:8082 || exit 1
+                            echo "✅ Frontend accessibility test passed"
+                        """
+                        
+                        // Integration tests
+                        sh """
+                            echo "🔗 Running integration tests..."
+                            
+                            # Test API endpoints
+                            curl -f http://localhost:5002/health || exit 1
+                            echo "✅ Backend API test passed"
+                            
+                            # Test database connectivity through backend
+                            response=\$(curl -s http://localhost:5002/health)
+                            if echo "\$response" | grep -q "healthy"; then
+                                echo "✅ Database integration test passed"
+                            else
+                                echo "❌ Database integration test failed"
+                                exit 1
+                            fi
+                        """
+                        
+                        echo "✅ All tests passed successfully!"
+                        
+                    } catch (Exception e) {
+                        echo "❌ Testing failed: ${e.getMessage()}"
+                        throw e
+                    } finally {
+                        // Cleanup test containers
+                        sh """
+                            docker stop ${TEST_CONTAINER_PREFIX}-frontend ${TEST_CONTAINER_PREFIX}-backend ${TEST_CONTAINER_PREFIX}-db || true
+                            docker rm ${TEST_CONTAINER_PREFIX}-frontend ${TEST_CONTAINER_PREFIX}-backend ${TEST_CONTAINER_PREFIX}-db || true
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('🚀 Push to Docker Hub') {
+            steps {
+                script {
+                    echo "🚀 Pushing images to Docker Hub..."
+                    
+                    // Login to Docker Hub
+                    sh """
+                        echo "${DOCKER_HUB_CREDENTIALS_PSW}" | docker login -u "${DOCKER_HUB_CREDENTIALS_USR}" --password-stdin
+                    """
+                    
+                    // Push all images
+                    sh """
+                        docker push ${FRONTEND_IMAGE}:${IMAGE_VERSION}
+                        docker push ${FRONTEND_IMAGE}:latest
+                        
+                        docker push ${BACKEND_IMAGE}:${IMAGE_VERSION}
+                        docker push ${BACKEND_IMAGE}:latest
+                        
+                        docker push ${DATABASE_IMAGE}:${IMAGE_VERSION}
+                        docker push ${DATABASE_IMAGE}:latest
+                    """
+                    
+                    echo "✅ Successfully pushed all images to Docker Hub"
+                }
+            }
+        }
+        
+        stage('🔍 Verify Docker Hub Images') {
+            steps {
+                script {
+                    echo "🔍 Verifying images on Docker Hub..."
+                    
+                    // Pull and test images from Docker Hub
+                    sh """
+                        # Remove local images to ensure we're pulling from Docker Hub
+                        docker rmi ${FRONTEND_IMAGE}:${IMAGE_VERSION} || true
+                        docker rmi ${BACKEND_IMAGE}:${IMAGE_VERSION} || true
+                        docker rmi ${DATABASE_IMAGE}:${IMAGE_VERSION} || true
+                        
+                        # Pull images from Docker Hub
+                        docker pull ${FRONTEND_IMAGE}:${IMAGE_VERSION}
+                        docker pull ${BACKEND_IMAGE}:${IMAGE_VERSION}
+                        docker pull ${DATABASE_IMAGE}:${IMAGE_VERSION}
+                        
+                        echo "✅ Successfully pulled images from Docker Hub"
+                        
+                        # Verify image details
+                        docker images | grep ${DOCKER_HUB_REPO}
+                    """
+                }
+            }
+        }
+        
+        stage('📊 Generate Reports') {
+            steps {
+                script {
+                    // Generate build report
+                    writeFile file: 'build-report.txt', text: """
+                    🎯 Build Report - ${APP_NAME}
+                    ================================
+                    Build Number: ${BUILD_NUMBER}
+                    Version: ${IMAGE_VERSION}
+                    Environment: ${params.ENVIRONMENT}
+                    Timestamp: ${new Date()}
+                    
+                    📦 Images Built:
+                    - Frontend: ${FRONTEND_IMAGE}:${IMAGE_VERSION}
+                    - Backend: ${BACKEND_IMAGE}:${IMAGE_VERSION}
+                    - Database: ${DATABASE_IMAGE}:${IMAGE_VERSION}
+                    
+                    🚀 Docker Hub Repository: ${DOCKER_HUB_REPO}
+                    ✅ Build Status: SUCCESS
+                    """
+                    
+                    archiveArtifacts artifacts: 'build-report.txt'
+                    echo "📊 Build report generated and archived"
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                // Cleanup
+                sh """
+                    docker network rm ${TEST_NETWORK} || true
+                    docker logout || true
+                """
+                
+                echo "🧹 Cleanup completed"
+            }
+        }
+        success {
+            script {
+                echo "✅ Pipeline completed successfully!"
+                echo "🎉 Images are available at Docker Hub: ${DOCKER_HUB_REPO}"
+                
+                // Trigger deployment pipeline if requested
+                if (params.DEPLOY_AFTER_BUILD) {
+                    echo "🚀 Triggering deployment pipeline..."
+                    // You can trigger another Jenkins job here
+                    // build job: 'deploy-pipeline', parameters: [string(name: 'VERSION', value: IMAGE_VERSION)]
+                }
+            }
+        }
+        failure {
+            script {
+                echo "❌ Pipeline failed!"
+                echo "🔍 Check the logs for details"
+                
+                // Cleanup any remaining test containers
+                sh """
+                    docker ps -a | grep ${TEST_CONTAINER_PREFIX} | awk '{print \$1}' | xargs docker rm -f || true
+                """
+            }
+        }
+    }
+}

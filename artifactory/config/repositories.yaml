@@ -1,0 +1,240 @@
+# Artifactory Repository Configuration
+# This file defines the repository structure and policies
+
+repositories:
+  # Docker repositories
+  docker-local:
+    type: docker
+    description: "Local Docker repository for microservice admin app"
+    repoLayoutRef: "simple-default"
+    dockerApiVersion: "V2"
+    maxUniqueSnapshots: 10
+    handleReleases: true
+    handleSnapshots: true
+    suppressPomConsistencyChecks: false
+    blackedOut: false
+    propertySets:
+    - "artifactory"
+    archiveBrowsingEnabled: false
+    calculateYumMetadata: false
+    enableTokenAuthentication: true
+    cleanup:
+      retentionPeriodInDays: 30
+      deleteArtifacts: true
+      deleteMetadata: true
+
+  docker-remote:
+    type: docker
+    description: "Remote Docker Hub proxy"
+    url: "https://registry-1.docker.io/"
+    username: "${DOCKER_HUB_USERNAME}"
+    password: "${DOCKER_HUB_PASSWORD}"
+    proxy: ""
+    remoteRepoLayoutRef: "simple-default"
+    dockerApiVersion: "V2"
+    enableTokenAuthentication: true
+    listRemoteFolderItems: true
+    synchronizeProperties: false
+    shareConfiguration: false
+    blockMismatchingMimeTypes: true
+    mismatchingMimeTypesOverrideList: ""
+    allowAnyHostAuth: false
+    enableCookieManagement: false
+    bowerRegistryUrl: ""
+    composerRegistryUrl: ""
+    pyPIRegistryUrl: ""
+    vcsType: ""
+    vcsGitProvider: ""
+    vcsGitDownloadUrl: ""
+    bypassHeadRequests: false
+    clientTlsCertificate: ""
+    feedContextPath: ""
+    downloadContextPath: ""
+    v3FeedUrl: ""
+    contentSynchronisation:
+      enabled: false
+
+  docker-virtual:
+    type: virtual
+    description: "Virtual Docker repository aggregating local and remote"
+    repositories:
+    - "docker-local"
+    - "docker-remote"
+    defaultDeploymentRepo: "docker-local"
+    artifactoryRequestsCanRetrieveRemoteArtifacts: true
+    keyPair: ""
+    pomRepositoryReferencesCleanupPolicy: "discard_active_reference"
+    dockerApiVersion: "V2"
+    enableTokenAuthentication: true
+
+  # Generic repositories
+  generic-local:
+    type: generic
+    description: "Local generic repository for build artifacts"
+    repoLayoutRef: "simple-default"
+    maxUniqueSnapshots: 5
+    handleReleases: true
+    handleSnapshots: true
+    suppressPomConsistencyChecks: false
+    blackedOut: false
+    propertySets:
+    - "artifactory"
+    archiveBrowsingEnabled: true
+    calculateYumMetadata: false
+    cleanup:
+      retentionPeriodInDays: 60
+      deleteArtifacts: true
+      deleteMetadata: true
+
+  release-local:
+    type: generic
+    description: "Release repository for promoted artifacts"
+    repoLayoutRef: "simple-default"
+    maxUniqueSnapshots: 0
+    handleReleases: true
+    handleSnapshots: false
+    suppressPomConsistencyChecks: false
+    blackedOut: false
+    propertySets:
+    - "artifactory"
+    archiveBrowsingEnabled: true
+    calculateYumMetadata: false
+    cleanup:
+      retentionPeriodInDays: 365
+      deleteArtifacts: false
+      deleteMetadata: false
+
+  # NPM repositories (for future frontend dependencies)
+  npm-local:
+    type: npm
+    description: "Local NPM repository"
+    repoLayoutRef: "npm-default"
+    maxUniqueSnapshots: 5
+    handleReleases: true
+    handleSnapshots: true
+    suppressPomConsistencyChecks: false
+    blackedOut: false
+    propertySets:
+    - "artifactory"
+
+  npm-remote:
+    type: npm
+    description: "Remote NPM registry proxy"
+    url: "https://registry.npmjs.org/"
+    remoteRepoLayoutRef: "npm-default"
+    listRemoteFolderItems: true
+    synchronizeProperties: false
+    shareConfiguration: false
+    blockMismatchingMimeTypes: true
+    allowAnyHostAuth: false
+    enableCookieManagement: false
+    bypassHeadRequests: false
+
+  npm-virtual:
+    type: virtual
+    description: "Virtual NPM repository"
+    repositories:
+    - "npm-local"
+    - "npm-remote"
+    defaultDeploymentRepo: "npm-local"
+    artifactoryRequestsCanRetrieveRemoteArtifacts: true
+
+  # PyPI repositories (for Python dependencies)
+  pypi-local:
+    type: pypi
+    description: "Local PyPI repository"
+    repoLayoutRef: "simple-default"
+    maxUniqueSnapshots: 5
+    handleReleases: true
+    handleSnapshots: true
+    suppressPomConsistencyChecks: false
+    blackedOut: false
+    propertySets:
+    - "artifactory"
+
+  pypi-remote:
+    type: pypi
+    description: "Remote PyPI proxy"
+    url: "https://pypi.org/"
+    remoteRepoLayoutRef: "simple-default"
+    listRemoteFolderItems: true
+    synchronizeProperties: false
+    shareConfiguration: false
+    blockMismatchingMimeTypes: true
+    allowAnyHostAuth: false
+    enableCookieManagement: false
+    bypassHeadRequests: false
+    pyPIRegistryUrl: "https://pypi.org/"
+
+  pypi-virtual:
+    type: virtual
+    description: "Virtual PyPI repository"
+    repositories:
+    - "pypi-local"
+    - "pypi-remote"
+    defaultDeploymentRepo: "pypi-local"
+    artifactoryRequestsCanRetrieveRemoteArtifacts: true
+
+# Build info configuration
+buildInfo:
+  enabled: true
+  maxBuildsToKeep: 100
+  excludeEnvVars: "PASSWORD,SECRET,TOKEN,KEY"
+  includeEnvVars: "*"
+
+# Xray security configuration
+xray:
+  enabled: true
+  indexResources: true
+  blockUnscannedArtifacts: false
+  blockMaliciousArtifacts: true
+
+# Cleanup policies
+cleanup:
+  policies:
+  - name: "docker-cleanup"
+    description: "Cleanup old Docker images"
+    repositories:
+    - "docker-local"
+    criteria:
+    - type: "lastDownloaded"
+      value: "30d"
+    - type: "created"
+      value: "60d"
+    actions:
+    - type: "delete"
+
+  - name: "generic-cleanup"
+    description: "Cleanup old generic artifacts"
+    repositories:
+    - "generic-local"
+    criteria:
+    - type: "lastDownloaded"
+      value: "60d"
+    - type: "created"
+      value: "90d"
+    actions:
+    - type: "delete"
+
+# Security settings
+security:
+  anonymousAccess: false
+  anonAccessToBuildInfosDisabled: true
+  buildGlobalBasicReadAllowed: false
+  buildGlobalBasicReadForAnonymous: false
+  hideUnauthorizedResources: true
+
+# System settings
+system:
+  baseUrl: "${ARTIFACTORY_BASE_URL}"
+  customUrlBase: ""
+  emailSettings:
+    enabled: true
+    host: "${SMTP_HOST}"
+    port: 587
+    username: "${SMTP_USERNAME}"
+    password: "${SMTP_PASSWORD}"
+    from: "artifactory@company.com"
+    subjectPrefix: "[Artifactory]"
+    ssl: false
+    tls: true

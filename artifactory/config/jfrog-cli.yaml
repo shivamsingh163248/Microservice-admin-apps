@@ -1,0 +1,165 @@
+# JFrog CLI Configuration Template
+# Configure JFrog CLI for Artifactory integration
+
+version: 1
+
+# Server configurations
+servers:
+- serverId: "artifactory-server"
+  artifactoryUrl: "${ARTIFACTORY_URL}"
+  username: "${ARTIFACTORY_USERNAME}"
+  password: "${ARTIFACTORY_PASSWORD}"
+  apiKey: "${ARTIFACTORY_API_KEY}"
+  accessToken: "${ARTIFACTORY_ACCESS_TOKEN}"
+  clientCertPath: ""
+  clientCertKeyPath: ""
+  sshKeyPath: ""
+  sshPassphrase: ""
+  insecureTls: false
+
+# Default configurations
+defaults:
+  serverId: "artifactory-server"
+
+# Build configuration
+buildSettings:
+  buildName: "microservice-admin-app"
+  buildNumber: "${BUILD_NUMBER}"
+  project: "microservice-admin"
+  module: ""
+
+# Repository settings
+repositories:
+  docker:
+    local: "docker-local"
+    remote: "docker-remote"
+    virtual: "docker-virtual"
+
+  generic:
+    local: "generic-local"
+    release: "release-local"
+
+  npm:
+    local: "npm-local"
+    remote: "npm-remote"
+    virtual: "npm-virtual"
+
+  pypi:
+    local: "pypi-local"
+    remote: "pypi-remote"
+    virtual: "pypi-virtual"
+
+# Upload specifications
+uploadSpecs:
+  docker:
+    files:
+    - pattern: "docker-images/*"
+      target: "docker-local/"
+      recursive: true
+      flat: false
+      build: true
+
+  generic:
+    files:
+    - pattern: "artifacts/generic/*"
+      target: "generic-local/microservice-admin-app/${BUILD_NUMBER}/"
+      recursive: true
+      flat: false
+      build: true
+      props: "build.name=${BUILD_NAME};build.number=${BUILD_NUMBER};environment=${ENVIRONMENT}"
+
+  reports:
+    files:
+    - pattern: "artifacts/reports/*"
+      target: "generic-local/microservice-admin-app/${BUILD_NUMBER}/reports/"
+      recursive: true
+      flat: false
+      build: true
+      props: "type=report;build.name=${BUILD_NAME};build.number=${BUILD_NUMBER}"
+
+# Download specifications
+downloadSpecs:
+  latest:
+    files:
+    - pattern: "generic-local/microservice-admin-app/*/(*)"
+      target: "downloads/{1}"
+      sortBy: [ "created" ]
+      sortOrder: "desc"
+      limit: 1
+      build: true
+
+# Search specifications  
+searchSpecs:
+  artifacts:
+    files:
+    - pattern: "generic-local/microservice-admin-app/*"
+      sortBy: [ "created" ]
+      sortOrder: "desc"
+      limit: 10
+
+  dockerImages:
+    files:
+    - pattern: "docker-local/*"
+      sortBy: [ "created" ]
+      sortOrder: "desc"
+      limit: 20
+
+# Properties to set on artifacts
+properties:
+  build:
+  - "build.name=${BUILD_NAME}"
+  - "build.number=${BUILD_NUMBER}"
+  - "build.timestamp=${BUILD_TIMESTAMP}"
+  - "vcs.revision=${GIT_COMMIT}"
+  - "vcs.url=${GIT_URL}"
+
+  deployment:
+  - "environment=${ENVIRONMENT}"
+  - "version=${IMAGE_VERSION}"
+  - "component=${COMPONENT}"
+  - "tier=${TIER}"
+
+  quality:
+  - "test.status=${TEST_STATUS}"
+  - "security.scan=${SECURITY_SCAN_STATUS}"
+  - "quality.gate=${QUALITY_GATE_STATUS}"
+
+# Promotion configuration
+promotion:
+  targetRepo: "release-local"
+  status: "Released"
+  comment: "Promoted to release repository"
+  copy: true
+  dependencies: true
+  scopes: [ "compile", "runtime" ]
+  includeDependencies: false
+  sourceRepo: "generic-local"
+
+# Cleanup configuration
+cleanup:
+  maxBuilds: 50
+  maxDays: 90
+  deleteArtifacts: true
+  async: true
+
+# Security scan configuration
+security:
+  xray:
+    enabled: true
+    failBuild: false
+    watches: [ "microservice-admin-watch" ]
+
+# Logging configuration
+logging:
+  level: "INFO"
+  logPath: "logs/jfrog-cli.log"
+
+# Parallel operations
+parallel:
+  downloads: 3
+  uploads: 3
+
+# Retry configuration
+retry:
+  maxAttempts: 3
+  waitTime: 5

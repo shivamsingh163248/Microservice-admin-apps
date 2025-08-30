@@ -1,0 +1,38 @@
+{
+  "files": [
+    {
+      "aql": {
+        "items.find": {
+          "repo": "generic-local",
+          "path": {"$match": "microservice-admin-app/*"},
+          "created": {"$before": "30d"}
+        }
+      }
+    },
+    {
+      "aql": {
+        "items.find": {
+          "repo": "docker-local",
+          "name": {"$nmatch": "*:latest"},
+          "created": {"$before": "60d"}
+        }
+      }
+    },
+    {
+      "pattern": "generic-local/microservice-admin-app/*/reports/*",
+      "target": "",
+      "props": "",
+      "recursive": true,
+      "regexp": false,
+      "build": false,
+      "exclusions": ["*.xml", "*.json"],
+      "aql": {
+        "items.find": {
+          "repo": "generic-local",
+          "path": {"$match": "microservice-admin-app/*/reports"},
+          "created": {"$before": "90d"}
+        }
+      }
+    }
+  ]
+}

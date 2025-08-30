@@ -1,0 +1,61 @@
+{
+  "files": [
+    {
+      "aql": {
+        "items.find": {
+          "repo": {"$or": ["generic-local", "docker-local"]},
+          "path": {"$match": "*microservice-admin-app*"}
+        }
+      },
+      "sortBy": ["repo", "path", "name"],
+      "sortOrder": "asc",
+      "limit": 1000
+    },
+    {
+      "pattern": "generic-local/microservice-admin-app/*",
+      "target": "",
+      "props": "",
+      "recursive": true,
+      "regexp": false,
+      "build": false
+    },
+    {
+      "pattern": "docker-local/*microservice*",
+      "target": "",
+      "props": "",
+      "recursive": true,
+      "regexp": false,
+      "build": false
+    },
+    {
+      "aql": {
+        "items.find": {
+          "repo": "generic-local",
+          "path": {"$match": "microservice-admin-app/*"},
+          "name": {"$match": "*.json"},
+          "@component": "frontend"
+        }
+      }
+    },
+    {
+      "aql": {
+        "items.find": {
+          "repo": "generic-local",
+          "path": {"$match": "microservice-admin-app/*"},
+          "name": {"$match": "*.json"},
+          "@component": "backend"
+        }
+      }
+    },
+    {
+      "aql": {
+        "items.find": {
+          "repo": "generic-local",
+          "path": {"$match": "microservice-admin-app/*"},
+          "name": {"$match": "*.json"},
+          "@component": "database"
+        }
+      }
+    }
+  ]
+}
