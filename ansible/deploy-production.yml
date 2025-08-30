@@ -47,9 +47,9 @@
       path: "{{ item }}"
       state: absent
     loop:
-      - /etc/apt/sources.list.d/docker.list
-      - /etc/apt/keyrings/docker.gpg
-      - /usr/share/keyrings/docker-archive-keyring.gpg
+    - /etc/apt/sources.list.d/docker.list
+    - /etc/apt/keyrings/docker.gpg
+    - /usr/share/keyrings/docker-archive-keyring.gpg
     ignore_errors: yes
 
   - name: Install Docker dependencies

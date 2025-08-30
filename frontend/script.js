@@ -2,8 +2,8 @@
 // When running in Docker, frontend and backend communicate through Docker network
 // When accessed from browser, use the exposed port
 const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? 
-    'http://localhost:5000' : 
-    `http://${window.location.hostname}:5000`;
+    'http://localhost:5001' : 
+    `http://${window.location.hostname}:5001`;
 
 // Helper function to get auth headers
 function getAuthHeaders() {
