@@ -31,7 +31,7 @@ A comprehensive microservice application with automated CI/CD deployment using G
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
 │   GitHub    │    │   GitHub    │    │   Ansible   │    │   AWS EC2   │
 │   Repository│────│   Actions   │────│ Deployment  │────│   Server    │
-│             │    │   Workflow  │    │             │    │ 44.201.129.77│
+│             │    │   Workflow  │    │             │    │54.234.122.255│
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
 ```
 
@@ -83,10 +83,10 @@ A comprehensive microservice application with automated CI/CD deployment using G
 ssh-keygen -t rsa -b 4096 -f ~/.ssh/aws-microservice-key
 
 # Copy public key to EC2 instance
-ssh-copy-id -i ~/.ssh/aws-microservice-key.pub ubuntu@44.201.129.77
+ssh-copy-id -i ~/.ssh/aws-microservice-key.pub ubuntu@54.234.122.255
 
 # Test connection
-ssh -i ~/.ssh/aws-microservice-key ubuntu@44.201.129.77
+ssh -i ~/.ssh/aws-microservice-key ubuntu@54.234.122.255
 ```
 
 #### For GitHub Actions
@@ -134,7 +134,7 @@ Add these secrets to your GitHub repository:
 | `SSH_PRIVATE_KEY` | AWS EC2 SSH private key | `-----BEGIN RSA PRIVATE KEY-----...` |
 | `GITHUB_TOKEN` | GitHub personal access token | `ghp_xxxxxxxxxxxx` |
 | `GHCR_TOKEN` | GitHub Container Registry token | `ghp_xxxxxxxxxxxx` |
-| `AWS_SERVER_IP` | Production server IP | `44.201.129.77` |
+| `AWS_SERVER_IP` | Production server IP | `54.234.122.255` |
 
 ## 🚀 GitHub Actions Workflows
 
@@ -295,8 +295,8 @@ GitHub Container Registry (ghcr.io/shivamsingh163248/)
 ## 🔍 Monitoring & Troubleshooting
 
 ### Health Check Endpoints
-- **Frontend**: http://44.201.129.77:8080
-- **Backend**: http://44.201.129.77:5000/health
+- **Frontend**: http://54.234.122.255:8080
+- **Backend**: http://54.234.122.255:5000/health
 - **Database**: Connection via backend API
 
 ### Common Issues & Solutions
@@ -308,8 +308,8 @@ GitHub Container Registry (ghcr.io/shivamsingh163248/)
 ## 🌐 Access Points
 
 ### Production Environment
-- **Application URL**: http://44.201.129.77:8080
-- **API Endpoint**: http://44.201.129.77:5000
+- **Application URL**: http://54.234.122.255:8080
+- **API Endpoint**: http://54.234.122.255:5000
 - **Admin Credentials**: admin/admin123
 
 ### Development Environment  
@@ -342,7 +342,7 @@ git push origin Ansible_Workflow
 # GitHub → Actions → View workflow run
 
 # Verify deployment
-curl http://44.201.129.77:8080
+curl http://54.234.122.255:8080
 ```
 
 ## 🎯 Quick Start Checklist

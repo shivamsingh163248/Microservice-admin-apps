@@ -107,7 +107,7 @@ Port 5000 (Backend) - Source: 0.0.0.0/0 (optional, for API access)
 ### Step 2: Test SSH Connection Manually
 ```bash
 # Test SSH connection to your server
-ssh -i your-key.pem ubuntu@44.201.129.77
+ssh -i your-key.pem ubuntu@54.234.122.255
 
 # If successful, you should see Ubuntu login
 ```
@@ -119,7 +119,7 @@ ssh -i your-key.pem ubuntu@44.201.129.77
 ### Step 4: Check Workflow Logs
 Look for these in the GitHub Actions logs:
 - ✅ "Setup SSH" step should succeed
-- ✅ "Add Known Hosts" step should add 44.201.129.77
+- ✅ "Add Known Hosts" step should add 54.234.122.255
 - ✅ "Verify Ansible Inventory" step should ping the server
 - ✅ "Run Ansible Playbook" step should deploy
 
@@ -136,7 +136,7 @@ Look for these in the GitHub Actions logs:
 2. **Deploy Job** (3-5 minutes):
    - ✅ Setup SSH connection
    - ✅ Install Ansible
-   - ✅ Connect to 44.201.129.77
+   - ✅ Connect to 54.234.122.255
    - ✅ Deploy containers
    - ✅ Verify deployment
 
@@ -167,8 +167,8 @@ on:
 
 After successful deployment, you should see:
 - ✅ GitHub Actions shows green checkmarks for both jobs
-- ✅ Application accessible at: http://44.201.129.77:8080
-- ✅ Backend API at: http://44.201.129.77:5000/health
+- ✅ Application accessible at: http://54.234.122.255:8080
+- ✅ Backend API at: http://54.234.122.255:5000/health
 - ✅ Ansible playbook reports "SUCCESS ✅"
 
 ## 📋 Next Action Items
@@ -176,6 +176,6 @@ After successful deployment, you should see:
 1. **Test the updated workflow** by pushing a commit
 2. **Check GitHub Actions logs** if deploy job still skips
 3. **Verify SSH key format** in GitHub Secrets
-4. **Test manual SSH connection** to 44.201.129.77
+4. **Test manual SSH connection** to 54.234.122.255
 
 The workflow should now run correctly on the `Ansible_Workflow` branch! 🚀
