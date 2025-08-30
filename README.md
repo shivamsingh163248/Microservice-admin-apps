@@ -26,7 +26,13 @@ A comprehensive microservice application with automated CI/CD deployment using G
 └─────────────────┘    └─────────────────┘    └─────────────────┘
 ```
 
-### CI/CD Pipeline Architecture
+
+### Services
+- **Frontend**: Nginx-based web interface (Port 8081)
+- **Backend**: Flask API server (Port 5001)
+- **Database**: MySQL database (Port 3306)
+
+### CI/CD Pipeline Architecturer
 ```
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
 │   GitHub    │    │   GitHub    │    │   Ansible   │    │   AWS EC2   │
@@ -34,6 +40,7 @@ A comprehensive microservice application with automated CI/CD deployment using G
 │             │    │   Workflow  │    │             │    │54.234.122.255│
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
 ```
+
 
 ### Services Overview
 - **Frontend**: Nginx-based web interface serving admin panel
@@ -424,8 +431,8 @@ ansible_ssh_common_args='-o StrictHostKeyChecking=no'
 #### EC2 Security Groups
 Ensure these ports are open:
 - **Port 22**: SSH access
-- **Port 8080**: Frontend application
-- **Port 5000**: Backend API (optional)
+- **Port 8081**: Frontend application
+- **Port 5001**: Backend API (optional)
 
 ### 3. 🔧 GitHub Actions Configuration
 
@@ -556,8 +563,8 @@ docker-compose logs frontend
 docker-compose logs database
 
 # Check service status
-curl http://YOUR_EC2_IP:8080  # Frontend
-curl http://YOUR_EC2_IP:5000/health  # Backend API
+curl http://YOUR_EC2_IP:8081  # Frontend
+curl http://YOUR_EC2_IP:5001/health  # Backend API
 ```
 
 ### Log Files
@@ -578,9 +585,9 @@ sudo journalctl -u docker
 ## 🌐 Access Points
 
 ### Production Application
-- **Frontend**: http://YOUR_EC2_IP:8080
-- **Backend API**: http://YOUR_EC2_IP:5000
-- **Health Check**: http://YOUR_EC2_IP:5000/health
+- **Frontend**: http://YOUR_EC2_IP:8081
+- **Backend API**: http://YOUR_EC2_IP:5001
+- **Health Check**: http://YOUR_EC2_IP:5001/health
 
 ### Development Environment
 ```bash
@@ -588,8 +595,8 @@ sudo journalctl -u docker
 docker-compose up -d
 
 # Access points
-# Frontend: http://localhost:8080
-# Backend: http://localhost:5000
+# Frontend: http://localhost:8081
+# Backend: http://localhost:5001
 # Database: localhost:3306
 ```
 

@@ -29,7 +29,7 @@ services:
       DB_PASS: adminpass
       DB_NAME: adminapp
     ports:
-      - "5000:5000"
+      - "5001:5000"
     depends_on:
       database:
         condition: service_healthy
@@ -39,6 +39,6 @@ services:
     container_name: nginx_frontend
     restart: always
     ports:
-      - "8080:80"
+      - "8081:80"
     depends_on:
       - backend
