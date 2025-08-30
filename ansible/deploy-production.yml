@@ -29,10 +29,70 @@
       cache_valid_time: 3600
     when: ansible_os_family == "Debian"
 
-  - name: Install required packages
+  - name: Remove conflicting packages first
     apt:
       name:
+      - containerd
+      - docker
+      - docker-engine
       - docker.io
+      - docker-ce
+      - docker-ce-cli
+      state: absent
+    when: ansible_os_family == "Debian"
+    ignore_errors: yes
+
+  - name: Remove existing Docker repository files
+    file:
+      path: "{{ item }}"
+      state: absent
+    loop:
+    - /etc/apt/sources.list.d/docker.list
+    - /etc/apt/keyrings/docker.gpg
+    - /usr/share/keyrings/docker-archive-keyring.gpg
+    ignore_errors: yes
+
+  - name: Install Docker dependencies
+    apt:
+      name:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+      state: present
+    when: ansible_os_family == "Debian"
+
+  - name: Create keyrings directory
+    file:
+      path: /etc/apt/keyrings
+      state: directory
+      mode: '0755'
+
+  - name: Add Docker GPG key
+    shell: |
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+      chmod a+r /etc/apt/keyrings/docker.gpg
+    when: ansible_os_family == "Debian"
+
+  - name: Add Docker repository
+    apt_repository:
+      repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+      state: present
+      filename: docker
+    when: ansible_os_family == "Debian"
+
+  - name: Update package cache after adding Docker repo
+    apt:
+      update_cache: yes
+    when: ansible_os_family == "Debian"
+
+  - name: Install Docker and required packages
+    apt:
+      name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
       - git
       - curl
       - unzip
@@ -56,11 +116,11 @@
 
   - name: Verify Docker Compose installation
     command: docker-compose --version
-    register: docker_compose_version
+    register: docker_compose_check
 
   - name: Display Docker Compose version
     debug:
-      msg: "Docker Compose installed: {{ docker_compose_version.stdout }}"
+      msg: "Docker Compose installed: {{ docker_compose_check.stdout }}"
 
   - name: Start and enable Docker service
     systemd:
@@ -155,7 +215,7 @@
 
   - name: Wait for backend to be ready
     wait_for:
-      port: 5000
+      port: 5001
       host: localhost
       delay: 5
       timeout: 300
@@ -163,7 +223,7 @@
 
   - name: Wait for frontend to be ready
     wait_for:
-      port: 8080
+      port: 8081
       host: localhost
       delay: 5
       timeout: 300
@@ -171,7 +231,7 @@
 
   - name: Verify deployment - Backend health check
     uri:
-      url: "http://localhost:5000/health"
+      url: "http://localhost:5001/health"
       method: GET
       status_code: 200
     retries: 5
@@ -180,7 +240,7 @@
 
   - name: Verify deployment - Frontend accessibility
     uri:
-      url: "http://localhost:8080"
+      url: "http://localhost:8081"
       method: GET
       status_code: 200
     retries: 5
@@ -206,9 +266,9 @@
     debug:
       msg:
       - "✅ Deployment completed successfully!"
-      - "🔗 Frontend URL: http://{{ ansible_default_ipv4.address }}:8080"
-      - "🔗 Backend API: http://{{ ansible_default_ipv4.address }}:5000"
-      - "🔗 Backend Health: http://{{ ansible_default_ipv4.address }}:5000/health"
+      - "🔗 Frontend URL: http://{{ ansible_default_ipv4.address }}:8081"
+      - "🔗 Backend API: http://{{ ansible_default_ipv4.address }}:5001"
+      - "🔗 Backend Health: http://{{ ansible_default_ipv4.address }}:5001/health"
       - "📂 Application Directory: {{ app_dir }}"
       - "🏷️  Deployed Version: {{ image_version }}"
       - "📊 Service Status:"

@@ -9,7 +9,7 @@ from functools import wraps
 
 app = Flask(__name__)
 # Configure CORS to allow requests from frontend
-CORS(app, origins=["http://localhost:8080", "http://127.0.0.1:8080", "http://frontend:80"])
+CORS(app, origins=["http://localhost:8081", "http://127.0.0.1:8081", "http://frontend:80", "http://54.234.122.255:8081"])
 
 # Secret key for JWT tokens
 app.config['SECRET_KEY'] = 'your-secret-key-here-change-in-production'

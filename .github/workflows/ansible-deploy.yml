@@ -2,7 +2,7 @@ name: Build, Push, and Deploy Microservices
 
 on:
   push:
-    branches: [ Ansible_Workflow ]
+    branches: [ Ansible_Workflow_Port ]
   workflow_dispatch:
 
 env:
@@ -80,7 +80,7 @@ jobs:
   deploy-with-ansible:
     needs: build-and-push
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/Ansible_Workflow'
+    if: github.ref == 'refs/heads/Ansible_Workflow_Port'
 
     steps:
     - name: Checkout Repo
@@ -104,7 +104,7 @@ jobs:
       run: |
         mkdir -p ~/.ssh
         # Add your server's SSH host key to avoid host verification prompts
-        ssh-keyscan -H 44.201.129.77 >> ~/.ssh/known_hosts
+        ssh-keyscan -H 54.234.122.255 >> ~/.ssh/known_hosts
 
     - name: Verify Ansible Inventory
       run: |

@@ -118,7 +118,7 @@ This approach works better with traditional RSA keys from AWS.
 
 After the fix:
 - ✅ `deploy-with-ansible` job will run (not skip)
-- ✅ SSH connection to 44.201.129.77 will succeed
+- ✅ SSH connection to 54.234.122.255 will succeed
 - ✅ Ansible playbook will deploy your services
 - ✅ App will be accessible at http://44.201.129.77:8080
 
