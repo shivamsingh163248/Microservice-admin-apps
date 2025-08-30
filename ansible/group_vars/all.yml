@@ -4,6 +4,9 @@
 app_name: microservice-admin-app
 app_version: "{{ image_version | default('latest') }}"
 
+# Docker Configuration
+docker_compose_version: "v2.21.0"
+
 # Docker Registry Configuration
 ghcr_registry: ghcr.io
 ghcr_owner: "{{ ghcr_owner | default('shivamsingh163248') }}"
@@ -12,12 +15,12 @@ ghcr_owner: "{{ ghcr_owner | default('shivamsingh163248') }}"
 services:
   backend:
     image: "{{ ghcr_registry }}/{{ ghcr_owner }}/flask_backend"
-    port: 5000
+    port: 5001
     container_name: flask_backend
 
   frontend:
     image: "{{ ghcr_registry }}/{{ ghcr_owner }}/nginx_frontend"
-    port: 8080
+    port: 8081
     container_name: nginx_frontend
 
   database:

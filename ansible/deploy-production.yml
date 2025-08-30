@@ -29,10 +29,53 @@
       cache_valid_time: 3600
     when: ansible_os_family == "Debian"
 
-  - name: Install required packages
+  - name: Remove conflicting packages first
     apt:
       name:
+      - containerd
+      - docker
+      - docker-engine
       - docker.io
+      - docker-ce
+      - docker-ce-cli
+      state: absent
+    when: ansible_os_family == "Debian"
+    ignore_errors: yes
+
+  - name: Install Docker dependencies
+    apt:
+      name:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+      state: present
+    when: ansible_os_family == "Debian"
+
+  - name: Add Docker GPG key
+    apt_key:
+      url: https://download.docker.com/linux/ubuntu/gpg
+      state: present
+    when: ansible_os_family == "Debian"
+
+  - name: Add Docker repository
+    apt_repository:
+      repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+      state: present
+    when: ansible_os_family == "Debian"
+
+  - name: Update package cache after adding Docker repo
+    apt:
+      update_cache: yes
+    when: ansible_os_family == "Debian"
+
+  - name: Install Docker and required packages
+    apt:
+      name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
       - git
       - curl
       - unzip

@@ -3,8 +3,8 @@
 This directory contains Ansible playbooks and configuration for automated deployment of the microservices application.
 
 ## 📁 Directory Structure
-
-```
+- **Frontend**: `http://YOUR_SERVER_IP:8081`
+- **Backend**: `http://YOUR_SERVER_IP:5001```
 ansible/
 ├── ansible.cfg              # Ansible configuration
 ├── inventory.ini           # Server inventory
