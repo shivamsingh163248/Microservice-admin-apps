@@ -187,53 +187,149 @@ Scan credentials: Same as checkout credentials
 ### **5.1 Discover Branches**
 ```yaml
 ☑️ Discover branches
-Strategy: Exclude branches that are also filed as PRs
+Strategy: All branches
 ```
 
-**Options Explained**:
-- **All branches**: Discovers all branches
-- **Only branches that are not filed as PRs**: ✅ **Recommended** - Avoids duplicate builds
-- **Only branches that are filed as PRs**: Only PR branches
+**Available Strategy Options**:
+- **All branches** - ✅ **Recommended** - Discovers all branches in the repository
+- **Only branches that are not also filed as PRs** - Avoids duplicate builds
+- **Only branches that are also filed as PRs** - Only builds PR branches
 
-### **5.2 Discover Pull Requests from Origin**
+### **5.2 Discover Pull Requests from Origin** 
 ```yaml
 ☑️ Discover pull requests from origin
-Strategy: Merging the pull request with the current target branch revision
-```
-
-**Trust Level Options**:
-- **Nobody**: Most secure, no PR builds
-- **Everyone**: ⚠️ Less secure, builds all PRs
-- **From users with Admin or Write permission**: ✅ **Recommended**
-- **From users with Admin permission**: Most secure for sensitive projects
-
-### **5.3 Discover Pull Requests from Forks**
-```yaml
-☑️ Discover pull requests from forks  
 Strategy: Merging the pull request with the current target branch revision
 Trust: From users with Admin or Write permission
 ```
 
-**Trust Options Explained**:
-- **Nobody**: No fork PR builds
-- **Forks in the same account**: Builds PRs from forks in same GitHub account
-- **From users with Admin or Write permission**: ✅ **Recommended**
-- **Everyone**: ⚠️ Security risk - builds from any fork
+**Available Strategy Options**:
+- **The current pull request revision**
+- **The merge of the pull request with the current target branch revision** - ✅ **Recommended**
+- **Both the current pull request revision and the pull request merged**
 
-### **5.4 Additional Behaviors (Optional)**
+**Trust Level Options**:
+- **Nobody** - No automatic PR builds
+- **Forks in the same account** - Only trusted forks
+- **From users with Admin or Write permission** - ✅ **Recommended** 
+- **From users with Admin permission** - Most restrictive
+- **Everyone** - ⚠️ Least secure
+
+### **5.3 Discover Pull Requests from Forks**
+```yaml
+☑️ Discover pull requests from forks
+Strategy: Merging the pull request with the current target branch revision  
+Trust: From users with Admin or Write permission
+```
+
+**Same options as above for Strategy and Trust levels**
+
+### **5.4 Filter by Name (with wildcards)**
+```yaml
+☑️ Filter by name (with wildcards)
+Include: *
+Exclude: feature/experimental-*
+```
+**Examples**:
+- Include: `main`, `develop`, `release/*`
+- Exclude: `feature/temp-*`, `hotfix/old-*`
+
+### **5.5 Additional Standard Behaviors**
+
+#### **Clean Before Checkout**
 ```yaml
 ☑️ Clean before checkout
   ☑️ Delete untracked nested repositories
-
-☑️ Clean after checkout  
-  ☑️ Delete untracked nested repositories
-
-☑️ Check out to matching local branch
-  (Checks out to local branch matching remote branch name)
-
-☑️ Wipe out repository & force clone
-  (Forces fresh clone for each build - slower but cleaner)
 ```
+
+#### **Clean After Checkout**  
+```yaml
+☑️ Clean after checkout
+  ☑️ Delete untracked nested repositories
+```
+
+#### **Check Out to Matching Local Branch**
+```yaml
+☑️ Check out to matching local branch
+```
+*Creates local branch with same name as remote branch*
+
+#### **Wipe Out Repository & Force Clone**
+```yaml
+☐ Wipe out repository & force clone
+```
+*⚠️ Slower but ensures clean workspace - use only if needed*
+
+---
+
+## 🎯 **Step 5.6: Recommended Configuration for Jenkins_Ansible_Deployment_Workflow**
+
+### **Specific Configuration Steps**
+
+#### **Step A: Add Discover Branches Behavior**
+1. Click **"Add"** button in Behaviors section
+2. Select **"Discover branches"** from dropdown
+3. Keep default strategy: **"All branches"**
+
+#### **Step B: Add Pull Request Discovery (Optional but Recommended)**
+1. Click **"Add"** button again
+2. Select **"Discover pull requests from origin"**
+3. Configure:
+   ```yaml
+   Strategy: Merging the pull request with the current target branch revision
+   Trust: From users with Admin or Write permission
+   ```
+
+#### **Step C: Add Repository Cleanup**
+1. Click **"Add"** button
+2. Select **"Clean before checkout"**
+3. Check ☑️ **"Delete untracked nested repositories"**
+
+4. Click **"Add"** button again  
+5. Select **"Clean after checkout"**
+6. Check ☑️ **"Delete untracked nested repositories"**
+
+#### **Step D: Add Local Branch Matching**
+1. Click **"Add"** button
+2. Select **"Check out to matching local branch"**
+3. Leave default settings
+
+### **Final Behaviors Configuration Summary**
+```yaml
+Behaviors Applied:
+✅ Discover branches: All branches
+✅ Discover pull requests from origin: 
+   Strategy: Merging the pull request with the current target branch revision
+   Trust: From users with Admin or Write permission
+✅ Clean before checkout: ✅ Delete untracked nested repositories
+✅ Clean after checkout: ✅ Delete untracked nested repositories  
+✅ Check out to matching local branch: ✅ Enabled
+```
+
+### **What This Configuration Achieves for Your Project**
+
+#### **Branch Detection** 🎯
+- ✅ **Automatically detects** `Jenkins_Ansible_Deployment_Workflow` branch
+- ✅ **Monitors for new commits** and triggers builds automatically
+- ✅ **Handles branch renames** and updates gracefully
+- ✅ **Supports multiple branches** if you add more later
+
+#### **Pull Request Handling** 🔄
+- ✅ **Builds PRs safely** with proper permission checks
+- ✅ **Tests merge results** before actual merging
+- ✅ **Prevents unauthorized builds** from unknown contributors
+- ✅ **Maintains security** while enabling collaboration
+
+#### **Workspace Management** 🧹
+- ✅ **Clean workspace** for each build prevents conflicts
+- ✅ **Consistent build environment** every time
+- ✅ **No leftover artifacts** from previous builds
+- ✅ **Reliable build results** with fresh checkout
+
+#### **Branch Name Handling** 🏷️
+- ✅ **Correct local branch names** matching remote
+- ✅ **Proper Git operations** within pipeline
+- ✅ **Branch-specific configurations** work correctly
+- ✅ **Git commands reference** correct branch names
 
 ---
 
